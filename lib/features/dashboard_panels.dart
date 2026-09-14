@@ -122,8 +122,16 @@ class ConnectionPanel extends StatelessWidget {
 class DiagnosticsPanel extends StatelessWidget {
   final List<String> lines;
   final VoidCallback? onClear;
+  final VoidCallback? onExport;
+  final Map<String, String> unsupported;
 
-  const DiagnosticsPanel({super.key, required this.lines, this.onClear});
+  const DiagnosticsPanel({
+    super.key,
+    required this.lines,
+    this.onClear,
+    this.onExport,
+    this.unsupported = const {},
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -135,16 +143,28 @@ class DiagnosticsPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(
-                'DIAGNOSTICS',
-                style: TextStyle(
-                  color: c.textMuted,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.6,
+              Expanded(
+                child: Text(
+                  'DIAGNOSTICS',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c.textMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
                 ),
               ),
-              const Spacer(),
+              if (onExport != null)
+                InkWell(
+                  onTap: onExport,
+                  child: Text(
+                    'export',
+                    style: TextStyle(color: c.accentText, fontSize: 11.5),
+                  ),
+                ),
+              if (onExport != null) const SizedBox(width: 8),
               InkWell(
                 onTap: onClear,
                 child: Text(
@@ -154,6 +174,23 @@ class DiagnosticsPanel extends StatelessWidget {
               ),
             ],
           ),
+          if (unsupported.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C2D12).withAlpha(90),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFB923C).withAlpha(120)),
+              ),
+              child: Text(
+                'Unsupported on this firmware: ${unsupported.keys.join(', ')} — '
+                'not retried. See export for reasons.',
+                style: const TextStyle(color: Color(0xFFFDBA74), fontSize: 11.5),
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           Expanded(
             child: lines.isEmpty

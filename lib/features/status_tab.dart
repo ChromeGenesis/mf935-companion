@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'status_cards.dart';
+import '../core/capability.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
 
@@ -29,6 +30,10 @@ class StatusTab extends StatefulWidget {
   /// Null-safe: tiles stay static when the shell doesn't provide it.
   final void Function(int tab)? onJumpTab;
 
+  /// Report a firmware rejection once so the shell can latch it in the
+  /// capability matrix instead of retrying.
+  final void Function(String goformId, String reason)? onUnsupported;
+
   const StatusTab({
     super.key,
     required this.client,
@@ -39,6 +44,7 @@ class StatusTab extends StatefulWidget {
     required this.onRefreshNow,
     required this.balanceFeed,
     this.onJumpTab,
+    this.onUnsupported,
   });
 
   @override
@@ -62,6 +68,7 @@ class _StatusTabState extends State<StatusTab> {
   bool _devicesOpen = true;
   String _powerSave = '';
   bool _powerBusy = false;
+  bool _powerUnsupported = false;
 
   @override
   void initState() {
@@ -206,12 +213,28 @@ class _StatusTabState extends State<StatusTab> {
   }
 
   Future<void> _applyPowerSave() async {
-    if (!widget.connected) return;
+    if (!widget.connected || _powerUnsupported) return;
     setState(() => _powerBusy = true);
     try {
       final mode = _powerSave;
       final ok = await widget.client.setPowerSave(mode);
-      widget.log(ok ? 'power-save set to "$mode"' : 'power-save refused');
+      if (!ok && mounted) {
+        setState(() => _powerUnsupported = true);
+        widget.onUnsupported?.call(
+          'SET_AUTO_POWER_SAVE',
+          'result=error on mode "$mode"',
+        );
+      }
+      widget.log(
+        ok
+            ? 'power-save set to "$mode"'
+            : formatCommandFailure(
+                command: 'SET_AUTO_POWER_SAVE',
+                result: 'error',
+                next:
+                    'This firmware may not support power-save writes — leaving current mode.',
+              ),
+      );
     } catch (e) {
       widget.log('power-save failed: $e');
     } finally {

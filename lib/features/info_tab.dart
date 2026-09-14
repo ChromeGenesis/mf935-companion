@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/capability.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -74,7 +75,15 @@ class _InfoTabState extends State<InfoTab> {
     if (!confirm) return;
     try {
       final ok = await widget.client.resetDataCounter();
-      widget.log(ok ? 'data counter reset' : 'counter reset refused');
+      widget.log(
+        ok
+            ? 'data counter reset'
+            : formatCommandFailure(
+                command: 'RESET_DATA_COUNTER',
+                result: 'error',
+                next: 'Reload stats; carrier bill is unaffected.',
+              ),
+      );
     } catch (e) {
       widget.log('counter reset failed: $e');
     }

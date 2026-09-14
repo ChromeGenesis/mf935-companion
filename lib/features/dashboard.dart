@@ -6,12 +6,16 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/poller.dart';
+import '../core/capability.dart';
+import '../core/diagnostics.dart';
+import '../core/platform.dart';
 import 'dashboard_panels.dart';
 import 'info_tab.dart';
 import '../core/notifications.dart';
@@ -52,6 +56,7 @@ class _DashboardPageState extends State<DashboardPage>
   );
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
+  final CapabilityRegistry capabilities = CapabilityRegistry();
 
   bool get _connected => _loginOk == true;
 
@@ -79,16 +84,20 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
-    trayManager.addListener(this);
+    if (isDesktop) {
+      windowManager.addListener(this);
+      trayManager.addListener(this);
+    }
     _client = ZteClient();
     _restoreSettings();
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
-    trayManager.removeListener(this);
+    if (isDesktop) {
+      windowManager.removeListener(this);
+      trayManager.removeListener(this);
+    }
     _cooldownTimer?.cancel();
     _balanceFeed.dispose();
     _poller?.stop();
@@ -246,6 +255,39 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _notifyNow(String title, String body) =>
       showAlert(_notifications, title, body);
 
+  /// Latch a firmware rejection once: capability matrix + log, no retries.
+  void _markUnsupported(String goformId, String reason) {
+    final isNew = capabilities.markUnsupported(goformId, reason);
+    if (isNew) {
+      _logLine('unsupported: $goformId — $reason (will not retry)');
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// Phase 0 diagnostic export: app version + firmware + status +
+  /// capability rejections + recent log. Copies to clipboard so it works
+  /// on desktop and mobile without file access.
+  Future<void> _exportDiagnostics() async {
+    final text = buildDiagnosticText(
+      appVersion: '1.0.0+1',
+      gatewayIp: _client.gatewayIp,
+      firmware: _status,
+      status: _status,
+      recentLog: _log,
+      unsupported: capabilities.unsupported,
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    _logLine(
+      'diagnostic export copied (${text.length} chars, '
+      '${capabilities.unsupported.length} unsupported cmds)',
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Diagnostics copied to clipboard')),
+      );
+    }
+  }
+
   void _startPoller() {
     _poller?.stop();
     _poller = ZtePoller(
@@ -317,6 +359,8 @@ class _DashboardPageState extends State<DashboardPage>
     final log = DiagnosticsPanel(
       lines: _log,
       onClear: () => setState(() => _log.clear()),
+      onExport: _exportDiagnostics,
+      unsupported: capabilities.unsupported,
     );
     if (_narrow) {
       return SingleChildScrollView(
@@ -359,16 +403,19 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void onWindowClose() async {
+    if (!isDesktop) return;
     await windowManager.hide();
   }
 
   @override
   void onTrayIconMouseDown() async {
+    if (!isDesktop) return;
     await windowManager.show();
   }
 
   @override
   void onTrayMenuItemClick(MenuItem menuItem) async {
+    if (!isDesktop) return;
     if (menuItem.key == 'show') {
       await windowManager.show();
     } else if (menuItem.key == 'quit') {
@@ -419,7 +466,7 @@ class _DashboardPageState extends State<DashboardPage>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'MF935 Companion',
+                            'MiFi Companion',
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: c.textPrimary,
@@ -457,6 +504,7 @@ class _DashboardPageState extends State<DashboardPage>
                             onRefreshNow: _refreshNow,
                             balanceFeed: _balanceFeed,
                             onJumpTab: (i) => setState(() => _tab = i),
+                            onUnsupported: _markUnsupported,
                           ),
                         )
                       : _tab == 1
@@ -470,6 +518,7 @@ class _DashboardPageState extends State<DashboardPage>
                           client: _client,
                           connected: _connected,
                           log: _logLine,
+                          onUnsupported: _markUnsupported,
                         )
                       : InfoTab(
                           client: _client,

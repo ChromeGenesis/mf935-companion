@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/capability.dart';
 import '../core/theme.dart';
 import 'ussd_saved.dart';
 import '../core/widgets.dart';
@@ -20,12 +21,14 @@ class UssdTab extends StatefulWidget {
   final ZteClient client;
   final bool connected;
   final void Function(String) log;
+  final void Function(String goformId, String reason)? onUnsupported;
 
   const UssdTab({
     super.key,
     required this.client,
     required this.connected,
     required this.log,
+    this.onUnsupported,
   });
 
   @override
@@ -145,6 +148,12 @@ class _UssdTabState extends State<UssdTab> {
             ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply' : ''})'
             : 'USSD failed: ${r.error}',
       );
+      if (!r.success && (r.flag == '41' || r.flag == '99')) {
+        widget.onUnsupported?.call(
+          'USSD_PROCESS',
+          'flag=${r.flag}: ${r.error}',
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _history.insert(0, UssdEntry(code, '$e', false)));
@@ -162,15 +171,17 @@ class _UssdTabState extends State<UssdTab> {
     try {
       final sent = await widget.client.replyUssd(text);
       if (!sent) {
+        final msg = formatCommandFailure(
+          command: 'USSD_PROCESS',
+          result: 'not-accepted',
+          next: 'Reply was not accepted. The menu may have expired — send the code again.',
+        );
         if (mounted) {
           setState(
-            () => _history.insert(
-              0,
-              UssdEntry('↳ $text', 'Modem refused the reply.', false),
-            ),
+            () => _history.insert(0, UssdEntry('↳ $text', msg, false)),
           );
         }
-        widget.log('USSD reply refused');
+        widget.log('USSD reply not accepted (USSD_PROCESS result=not-accepted)');
         return;
       }
       final r = await widget.client.waitUssdReply();

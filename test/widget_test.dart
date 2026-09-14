@@ -15,7 +15,7 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const ZteApp());
 
-    expect(find.text('MF935 Companion'), findsWidgets);
+    expect(find.text('MiFi Companion'), findsWidgets);
     expect(find.text('Login & poll'), findsOneWidget);
   });
 

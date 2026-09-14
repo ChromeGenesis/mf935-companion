@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
 import 'models.dart';
+import 'capability.dart' as cap;
 import 'zte_utils.dart' as zu;
 
 // Compatibility: models + pure helpers moved to dedicated modules, but
@@ -21,7 +22,7 @@ export 'zte_utils.dart';
 ///
 /// Browser + app share one login session: opening both can kick each other out.
 class ZteClient {
-  ZteClient({this._gatewayIp = '192.168.0.1', PersistCookieJar? cookieJar}) {
+  ZteClient({this._gatewayIp = '192.168.0.1', CookieJar? cookieJar}) {
     _dio = Dio(
       BaseOptions(
         baseUrl: 'http://$_gatewayIp',
@@ -39,7 +40,10 @@ class ZteClient {
         },
       ),
     );
-    _cookieJar = cookieJar ?? PersistCookieJar();
+    // In-memory cookies: file-backed PersistCookieJar needs a platform
+    // storage path (path_provider) and crashes on Android without it.
+    // Session restore is handled by re-login in the dashboard shell.
+    _cookieJar = cookieJar ?? CookieJar();
     _dio.interceptors.add(CookieManager(_cookieJar));
     // The stock web UI always sends these; some firmwares reject the
     // goform POST without a same-origin Referer.
@@ -56,7 +60,7 @@ class ZteClient {
   }
 
   late final Dio _dio;
-  late final PersistCookieJar _cookieJar;
+  late final CookieJar _cookieJar;
   String _gatewayIp;
 
   String get gatewayIp => _gatewayIp;
@@ -372,7 +376,19 @@ class ZteClient {
       return UssdResult(false, '', '', '', 'Send failed: $e');
     }
     if (!sent) {
-      return const UssdResult(false, '', '', '', 'Modem refused the request.');
+      return UssdResult(
+        false,
+        '',
+        '',
+        '',
+        cap.formatCommandFailure(
+          command: 'USSD_PROCESS',
+          result: 'not-accepted',
+          next:
+              'Modem did not accept USSD send. Check signal/SIM; '
+              'if flag=41/99 appears, this firmware blocks USSD.',
+        ),
+      );
     }
     return waitUssdReply(pollEvery: pollEvery, maxPolls: maxPolls);
   }

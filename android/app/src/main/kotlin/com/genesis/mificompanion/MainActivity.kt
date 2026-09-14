@@ -1,4 +1,4 @@
-package com.example.zte_mf935_app
+package com.genesis.mificompanion
 
 import io.flutter.embedding.android.FlutterActivity
 

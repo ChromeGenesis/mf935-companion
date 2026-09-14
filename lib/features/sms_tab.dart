@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'sms_group.dart';
 import 'sms_panels.dart';
+import '../core/capability.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -121,7 +122,15 @@ class _SmsTabState extends State<SmsTab> {
     if (ids.isEmpty) return;
     try {
       final done = await widget.client.deleteSms(ids);
-      widget.log(done ? '$what deleted (${ids.length})' : 'delete refused');
+      widget.log(
+        done
+            ? '$what deleted (${ids.length})'
+            : formatCommandFailure(
+                command: 'DELETE_SMS',
+                result: 'error',
+                next: 'Reload the inbox — the row may already be gone.',
+              ),
+      );
     } catch (e) {
       widget.log('delete failed: $e');
     }
@@ -243,7 +252,15 @@ class _SmsTabState extends State<SmsTab> {
     setState(() => _busy = true);
     try {
       final ok = await widget.client.sendSms(to, body);
-      widget.log(ok ? 'SMS sent to $to' : 'SMS refused by modem');
+      widget.log(
+        ok
+            ? 'SMS sent to $to'
+            : formatCommandFailure(
+                command: 'SEND_SMS',
+                result: 'error',
+                next: 'Check signal + SMS center number, then retry once.',
+              ),
+      );
       if (ok && mounted) setState(() => _textCtrl.clear());
     } catch (e) {
       widget.log('SMS send failed: $e');
@@ -261,7 +278,15 @@ class _SmsTabState extends State<SmsTab> {
         validity: _validity,
         deliveryReport: _report ? '1' : '0',
       );
-      widget.log(ok ? 'SMS settings saved' : 'SMS settings refused');
+      widget.log(
+        ok
+            ? 'SMS settings saved'
+            : formatCommandFailure(
+                command: 'SET_MESSAGE_CENTER',
+                result: 'error',
+                next: 'Reload settings; some firmwares ignore this silently.',
+              ),
+      );
     } catch (e) {
       widget.log('SMS settings failed: $e');
     } finally {
