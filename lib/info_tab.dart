@@ -25,11 +25,6 @@ class _InfoTabState extends State<InfoTab> {
   Map<String, dynamic> _stats = {};
   bool _busy = false;
 
-  bool _limitOn = false;
-  String _limitUnit = 'data';
-  final _sizeCtrl = TextEditingController();
-  final _alertCtrl = TextEditingController();
-
   @override
   void initState() {
     super.initState();
@@ -42,13 +37,6 @@ class _InfoTabState extends State<InfoTab> {
     if (widget.connected && !old.connected) _load();
   }
 
-  @override
-  void dispose() {
-    _sizeCtrl.dispose();
-    _alertCtrl.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
     if (!widget.connected || _busy) return;
     setState(() => _busy = true);
@@ -56,18 +44,11 @@ class _InfoTabState extends State<InfoTab> {
       final results = await Future.wait([
         widget.client.getDeviceInfo(),
         widget.client.getTrafficStats(),
-        widget.client.getDataLimit(),
       ]);
       if (!mounted) return;
-      final limit = Map<String, dynamic>.from(results[2] as Map);
       setState(() {
         _info = Map<String, dynamic>.from(results[0] as Map);
         _stats = Map<String, dynamic>.from(results[1] as Map);
-        _limitOn = '${limit['data_volume_limit_switch'] ?? ''}' == '1';
-        final unit = '${limit['data_volume_limit_unit'] ?? ''}';
-        _limitUnit = unit == 'time' ? 'time' : 'data';
-        _sizeCtrl.text = '${limit['data_volume_limit_size'] ?? ''}';
-        _alertCtrl.text = '${limit['data_volume_alert_percent'] ?? ''}';
       });
       widget.log('device info + stats loaded');
     } catch (e) {
@@ -93,21 +74,6 @@ class _InfoTabState extends State<InfoTab> {
       widget.log(ok ? 'data counter reset' : 'counter reset refused');
     } catch (e) {
       widget.log('counter reset failed: $e');
-    }
-    _load();
-  }
-
-  Future<void> _saveLimit() async {
-    try {
-      final ok = await widget.client.setDataLimit(
-        enabled: _limitOn,
-        unit: _limitUnit,
-        size: _sizeCtrl.text.trim(),
-        alertPercent: _alertCtrl.text.trim(),
-      );
-      widget.log(ok ? 'data limit saved' : 'data limit refused');
-    } catch (e) {
-      widget.log('data limit failed: $e');
     }
     _load();
   }
@@ -307,70 +273,6 @@ class _InfoTabState extends State<InfoTab> {
       ),
     );
 
-    final limitCard = GlassCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SectionLabel('Data limit'),
-          Row(
-            children: [
-              Switch(value: _limitOn, onChanged: (v) => setState(() => _limitOn = v)),
-              Text('Limit enabled',
-                  style:
-                      TextStyle(color: c.textSecondary, fontSize: 12.5)),
-              const SizedBox(width: 12),
-              PillSwitcher<String>(
-                options: const [
-                  PillOption(
-                      value: 'data',
-                      label: 'Data',
-                      icon: Icons.data_usage_outlined),
-                  PillOption(
-                      value: 'time',
-                      label: 'Time',
-                      icon: Icons.schedule_outlined),
-                ],
-                selected: _limitUnit,
-                onChanged: (v) => setState(() => _limitUnit = v),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _sizeCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText:
-                        _limitUnit == 'data' ? 'Size (modem units)' : 'Minutes',
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: _alertCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Alert %', isDense: true),
-                ),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton(
-                onPressed: _busy ? null : _saveLimit,
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-
     // Two columns when the tab earns the width, stacked on narrow.
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 12),
@@ -382,8 +284,6 @@ class _InfoTabState extends State<InfoTab> {
                 deviceCard,
                 const SizedBox(height: 10),
                 trafficCard,
-                const SizedBox(height: 10),
-                limitCard,
               ],
             );
           }
@@ -392,17 +292,7 @@ class _InfoTabState extends State<InfoTab> {
             children: [
               Expanded(flex: 11, child: deviceCard),
               const SizedBox(width: 10),
-              Expanded(
-                flex: 10,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    trafficCard,
-                    const SizedBox(height: 10),
-                    limitCard,
-                  ],
-                ),
-              ),
+              Expanded(flex: 10, child: trafficCard),
             ],
           );
         },

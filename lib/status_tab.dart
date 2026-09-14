@@ -55,6 +55,13 @@ class _StatusTabState extends State<StatusTab> {
   final Set<String> _expiryNotified = {};
   int? _deviceCount;
 
+  // Data cap (firmware-side limit): lives here next to the month-usage
+  // tile it constrains, not in Info.
+  bool _limitOn = false;
+  String _limitUnit = 'data';
+  final _limitSizeCtrl = TextEditingController();
+  final _limitAlertCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +83,8 @@ class _StatusTabState extends State<StatusTab> {
   @override
   void dispose() {
     _balanceTimer?.cancel();
+    _limitSizeCtrl.dispose();
+    _limitAlertCtrl.dispose();
     super.dispose();
   }
 
@@ -84,6 +93,7 @@ class _StatusTabState extends State<StatusTab> {
     _balanceTimer = Timer.periodic(_balanceEvery, (_) => _refreshBalance());
     _refreshDeviceCount();
     _refreshBalance();
+    _loadLimit();
   }
 
   Future<void> _loadCached() async {
@@ -175,6 +185,113 @@ class _StatusTabState extends State<StatusTab> {
     } catch (_) {
       // Leave the last known count; tile shows — when never fetched.
     }
+  }
+
+  /// Firmware data cap: load on connect, save on demand.
+  Future<void> _loadLimit() async {
+    if (!widget.connected) return;
+    try {
+      final limit = await widget.client.getDataLimit();
+      if (!mounted) return;
+      setState(() {
+        _limitOn = '${limit['data_volume_limit_switch'] ?? ''}' == '1';
+        final unit = '${limit['data_volume_limit_unit'] ?? ''}';
+        _limitUnit = unit == 'time' ? 'time' : 'data';
+        _limitSizeCtrl.text = '${limit['data_volume_limit_size'] ?? ''}';
+        _limitAlertCtrl.text = '${limit['data_volume_alert_percent'] ?? ''}';
+      });
+    } catch (e) {
+      widget.log('data limit load failed: $e');
+    }
+  }
+
+  Future<void> _saveLimit() async {
+    try {
+      final ok = await widget.client.setDataLimit(
+        enabled: _limitOn,
+        unit: _limitUnit,
+        size: _limitSizeCtrl.text.trim(),
+        alertPercent: _limitAlertCtrl.text.trim(),
+      );
+      widget.log(ok ? 'data limit saved' : 'data limit refused');
+    } catch (e) {
+      widget.log('data limit failed: $e');
+    }
+    _loadLimit();
+  }
+
+  /// Compact data-cap card under the tiles: the cap constrains the month
+  /// usage above, so they share the pane. One header row (label + switch
+  /// + save), one control row (unit + size + alert %).
+  Widget _limitCard(ZteColors c) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const SectionLabel('Data cap'),
+              const Spacer(),
+              Switch(
+                value: _limitOn,
+                activeThumbColor: c.accent,
+                onChanged: !widget.connected
+                    ? null
+                    : (v) => setState(() => _limitOn = v),
+              ),
+              const SizedBox(width: 4),
+              ElevatedButton(
+                onPressed: !widget.connected ? null : _saveLimit,
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              PillSwitcher<String>(
+                options: const [
+                  PillOption(
+                      value: 'data',
+                      label: 'Data',
+                      icon: Icons.data_usage_outlined),
+                  PillOption(
+                      value: 'time', label: 'Time', icon: Icons.schedule_outlined),
+                ],
+                selected: _limitUnit,
+                enabled: widget.connected,
+                onChanged: (v) => setState(() => _limitUnit = v),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _limitSizeCtrl,
+                  enabled: widget.connected,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText:
+                        _limitUnit == 'data' ? 'Size (modem units)' : 'Minutes',
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 90,
+                child: TextField(
+                  controller: _limitAlertCtrl,
+                  enabled: widget.connected,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Alert %', isDense: true),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   /// Balance section: divider, total, bundles, raw. [divider]=false
@@ -606,6 +723,8 @@ class _StatusTabState extends State<StatusTab> {
             ],
           ),
         ),
+        const SizedBox(height: 10),
+        _limitCard(c),
       ],
     );
   }

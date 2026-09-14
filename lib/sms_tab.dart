@@ -312,6 +312,370 @@ class _SmsTabState extends State<SmsTab> {
     );
   }
 
+  /// Inbox header: title + global actions, store switcher, search,
+  /// bulk bar. The message list below is separate so desktop can give
+  /// it the full left height with its own scroll.
+  Widget _inboxTop(
+    ZteColors c,
+    String capLine,
+    int unreadTotal,
+    List<SmsMessage> filtered,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            const SectionLabel('Inbox'),
+            if (_selected.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text(
+                  '${_selected.length} picked',
+                  style: TextStyle(
+                    color: c.accentText,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              )
+            else if (unreadTotal > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text(
+                  '$unreadTotal unread',
+                  style: TextStyle(color: c.textMuted, fontSize: 12),
+                ),
+              ),
+            const Spacer(),
+            IconButton(
+              tooltip: 'Mark all read',
+              onPressed: (_busy || unreadTotal == 0) ? null : _markAllRead,
+              icon: Icon(
+                Icons.done_all,
+                color: unreadTotal == 0
+                    ? c.textMuted.withAlpha(120)
+                    : c.accentText,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Refresh',
+              onPressed: _busy ? null : _load,
+              icon: Icon(Icons.refresh, color: c.accentText, size: 20),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            PillSwitcher<int>(
+              options: const [
+                PillOption(
+                  value: 1,
+                  label: 'Device',
+                  icon: Icons.smartphone_outlined,
+                ),
+                PillOption(
+                  value: 0,
+                  label: 'SIM',
+                  icon: Icons.sd_card_outlined,
+                ),
+              ],
+              selected: _store,
+              onChanged: (v) {
+                setState(() {
+                  _store = v;
+                  _selecting = false;
+                  _selected.clear();
+                  _collapsed.clear();
+                  _showAll.clear();
+                });
+                _load();
+              },
+            ),
+            const Spacer(),
+            Text(
+              capLine,
+              style: TextStyle(color: c.textMuted, fontSize: 11.5),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 38,
+          child: TextField(
+            controller: _searchCtrl,
+            decoration: InputDecoration(
+              hintText: 'Search sender or text…',
+              prefixIcon: Icon(Icons.search, color: c.textMuted, size: 16),
+              suffixIcon: _search.isEmpty
+                  ? null
+                  : InkWell(
+                      onTap: () {
+                        _searchCtrl.clear();
+                        setState(() => _search = '');
+                      },
+                      child: Icon(Icons.clear, color: c.textMuted, size: 16),
+                    ),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            ),
+            onChanged: (v) => setState(() => _search = v),
+          ),
+        ),
+        if (_selecting || _selected.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: c.accent.withAlpha(24),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.accent.withAlpha(90)),
+            ),
+            child: Row(
+              children: [
+                TextButton(
+                  onPressed: () => setState(() {
+                    _selected
+                      ..clear()
+                      ..addAll(filtered.map((m) => m.id));
+                  }),
+                  child: const Text('All'),
+                ),
+                TextButton(
+                  onPressed: () => setState(() {
+                    _selected.clear();
+                    _selecting = false;
+                  }),
+                  child: const Text('None'),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: _busy || _selected.isEmpty
+                      ? null
+                      : () => _markReadIds(_selected.toList()),
+                  child: const Text('Mark read'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: c.danger,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                  ),
+                  onPressed: _busy || _selected.isEmpty ? null : _bulkDelete,
+                  child: Text(
+                    'Delete${_selected.isEmpty ? '' : ' (${_selected.length})'}',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
+  /// Filter row + grouped messages (or spinner / empty state).
+  Widget _inboxList(
+    ZteColors c,
+    List<MapEntry<String, List<SmsMessage>>> groups,
+    List<SmsMessage> filtered,
+  ) {
+    if (_busy && _msgs.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (groups.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: Text(
+            _search.isNotEmpty || _unreadOnly
+                ? 'No messages match.'
+                : 'No messages in this store.',
+            style: TextStyle(color: c.textMuted),
+          ),
+        ),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            FilterChip(
+              label: const Text('Unread', style: TextStyle(fontSize: 12)),
+              selected: _unreadOnly,
+              visualDensity: VisualDensity.compact,
+              onSelected: (v) => setState(() => _unreadOnly = v),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                '${groups.length} sender${groups.length == 1 ? '' : 's'} · ${filtered.length} messages',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+            ),
+            const Spacer(),
+            InkWell(
+              onTap: () => setState(() {
+                // Toggle: collapse all if any expanded, else expand.
+                final anyOpen = groups.any((g) => !_collapsed.contains(g.key));
+                _collapsed.clear();
+                if (anyOpen) {
+                  _collapsed.addAll(groups.map((g) => g.key));
+                }
+              }),
+              child: Text(
+                groups.any((g) => !_collapsed.contains(g.key))
+                    ? 'collapse all'
+                    : 'expand all',
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        for (final g in groups) _group(g.key, g.value),
+      ],
+    );
+  }
+
+  /// Vertical compose card: number up top, roomy message box, live
+  /// character count + Send pinned bottom-right. Reads well at any
+  /// width, narrow or side-column.
+  Widget _sendCard(ZteColors c) {
+    final len = _textCtrl.text.length;
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SectionLabel('Send SMS'),
+          TextField(
+            controller: _numCtrl,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'To',
+              hintText: 'Number or sender name',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _textCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Message',
+              hintText: 'GSM-7 / Unicode auto-encoded',
+              isDense: true,
+            ),
+            maxLines: 3,
+            minLines: 1,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _send(),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(
+                len == 0 ? 'empty' : '$len char${len == 1 ? '' : 's'}',
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+              const Spacer(),
+              ElevatedButton(
+                onPressed: _busy ? null : _send,
+                child: const Text('Send'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _centerCard(ZteColors c) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SectionLabel('SMS center settings'),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 230),
+                child: SizedBox(
+                  width: 230,
+                  child: TextField(
+                    controller: _centerCtrl,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Center number',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 150,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _validity,
+                  decoration: const InputDecoration(
+                    labelText: 'Validity',
+                    isDense: true,
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'twelve_hours',
+                      child: Text('12 hours'),
+                    ),
+                    DropdownMenuItem(value: 'one_day', child: Text('1 day')),
+                    DropdownMenuItem(value: 'one_week', child: Text('1 week')),
+                    DropdownMenuItem(value: 'largest', child: Text('Maximum')),
+                  ],
+                  onChanged: (v) => setState(() => _validity = v ?? _validity),
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: _report,
+                    activeThumbColor: c.accent,
+                    onChanged: (v) => setState(() => _report = v),
+                  ),
+                  Text(
+                    'Reports',
+                    style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                  ),
+                ],
+              ),
+              ElevatedButton(
+                onPressed: _busy ? null : _saveSettings,
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.zc;
@@ -329,383 +693,71 @@ class _SmsTabState extends State<SmsTab> {
     final filtered = _filtered;
     final groups = groupSmsBySender(filtered);
     final unreadTotal = _msgs.where((m) => m.isNew).length;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        children: [
-          GlassCard(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ── Row 1: title + global actions (airy, nothing crammed) ──
-                Row(
-                  children: [
-                    const SectionLabel('Inbox'),
-                    if (_selected.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8),
-                        child: Text(
-                          '${_selected.length} picked',
-                          style: TextStyle(
-                            color: c.accentText,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      )
-                    else if (unreadTotal > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8),
-                        child: Text(
-                          '$unreadTotal unread',
-                          style: TextStyle(color: c.textMuted, fontSize: 12),
-                        ),
-                      ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Mark all read',
-                      onPressed: (_busy || unreadTotal == 0)
-                          ? null
-                          : _markAllRead,
-                      icon: Icon(
-                        Icons.done_all,
-                        color: unreadTotal == 0
-                            ? c.textMuted.withAlpha(120)
-                            : c.accentText,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      tooltip: 'Refresh',
-                      onPressed: _busy ? null : _load,
-                      icon: Icon(Icons.refresh, color: c.accentText, size: 20),
-                    ),
-                  ],
-                ),
-                // ── Row 2: store switcher + capacity (own breathing line) ──
-                Row(
-                  children: [
-                    PillSwitcher<int>(
-                      options: const [
-                        PillOption(
-                          value: 1,
-                          label: 'Device',
-                          icon: Icons.smartphone_outlined,
-                        ),
-                        PillOption(
-                          value: 0,
-                          label: 'SIM',
-                          icon: Icons.sd_card_outlined,
-                        ),
-                      ],
-                      selected: _store,
-                      onChanged: (v) {
-                        setState(() {
-                          _store = v;
-                          _selecting = false;
-                          _selected.clear();
-                          _collapsed.clear();
-                          _showAll.clear();
-                        });
-                        _load();
-                      },
-                    ),
-                    const Spacer(),
-                    Text(
-                      capLine,
-                      style: TextStyle(color: c.textMuted, fontSize: 11.5),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                // ── Row 3: full-width search ──
-                SizedBox(
-                  height: 38,
-                  child: TextField(
-                    controller: _searchCtrl,
-                    decoration: InputDecoration(
-                      hintText: 'Search sender or text…',
-                      prefixIcon: Icon(
-                        Icons.search,
-                        color: c.textMuted,
-                        size: 16,
-                      ),
-                      suffixIcon: _search.isEmpty
-                          ? null
-                          : InkWell(
-                              onTap: () {
-                                _searchCtrl.clear();
-                                setState(() => _search = '');
-                              },
-                              child: Icon(
-                                Icons.clear,
-                                color: c.textMuted,
-                                size: 16,
-                              ),
-                            ),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
-                    onChanged: (v) => setState(() => _search = v),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                // ── Row 4: filter + list meta ──
-                // ── Bulk bar: ABOVE the list, never buried ──
-                if (_selecting || _selected.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: c.accent.withAlpha(24),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: c.accent.withAlpha(90)),
-                    ),
-                    child: Row(
-                      children: [
-                        TextButton(
-                          onPressed: () => setState(() {
-                            _selected
-                              ..clear()
-                              ..addAll(filtered.map((m) => m.id));
-                          }),
-                          child: const Text('All'),
-                        ),
-                        TextButton(
-                          onPressed: () => setState(() {
-                            _selected.clear();
-                            _selecting = false;
-                          }),
-                          child: const Text('None'),
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: _busy || _selected.isEmpty
-                              ? null
-                              : () => _markReadIds(_selected.toList()),
-                          child: const Text('Mark read'),
-                        ),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: c.danger,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
-                            ),
-                          ),
-                          onPressed: _busy || _selected.isEmpty
-                              ? null
-                              : _bulkDelete,
-                          child: Text(
-                            'Delete${_selected.isEmpty ? '' : ' (${_selected.length})'}',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                // ── Grouped messages ──
-                if (_busy && _msgs.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (groups.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Center(
-                      child: Text(
-                        _search.isNotEmpty || _unreadOnly
-                            ? 'No messages match.'
-                            : 'No messages in this store.',
-                        style: TextStyle(color: c.textMuted),
-                      ),
-                    ),
-                  )
-                else ...[
-                  Row(
+
+    final sideColumn = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _sendCard(c),
+        const SizedBox(height: 10),
+        _centerCard(c),
+      ],
+    );
+
+    // Desktop: inbox owns the left at full height (its list scrolls
+    // inside the card); compose + center settings stack on the right.
+    // Narrow: the same cards stacked in one scroll.
+    return LayoutBuilder(
+      builder: (_, cons) {
+        if (cons.maxWidth > 760) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 7,
+                child: GlassCard(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      FilterChip(
-                        label: const Text(
-                          'Unread',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        selected: _unreadOnly,
-                        visualDensity: VisualDensity.compact,
-                        onSelected: (v) => setState(() => _unreadOnly = v),
-                      ),
-                      const SizedBox(width: 10),
-                      Flexible(
-                        child: Text(
-                          '${groups.length} sender${groups.length == 1 ? '' : 's'} · ${filtered.length} messages',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
-                        ),
-                      ),
-                      const Spacer(),
-                      InkWell(
-                        onTap: () => setState(() {
-                          // Toggle: collapse all if any expanded, else expand.
-                          final anyOpen = groups.any(
-                            (g) => !_collapsed.contains(g.key),
-                          );
-                          _collapsed.clear();
-                          if (anyOpen) {
-                            _collapsed.addAll(groups.map((g) => g.key));
-                          }
-                        }),
-                        child: Text(
-                          groups.any((g) => !_collapsed.contains(g.key))
-                              ? 'collapse all'
-                              : 'expand all',
-                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                      _inboxTop(c, capLine, unreadTotal, filtered),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: _inboxList(c, groups, filtered),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  for (final g in groups) _group(g.key, g.value),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          GlassCard(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SectionLabel('Send SMS'),
-                Row(
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 5,
+                child: SingleChildScrollView(child: sideColumn),
+              ),
+            ],
+          );
+        }
+        return SingleChildScrollView(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Column(
+            children: [
+              GlassCard(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: 140,
-                      child: TextField(
-                        controller: _numCtrl,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: 'To',
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _textCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Message',
-                          isDense: true,
-                        ),
-                        maxLines: 1,
-                        onSubmitted: (_) => _send(),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: _busy ? null : _send,
-                      child: const Text('Send'),
-                    ),
+                    _inboxTop(c, capLine, unreadTotal, filtered),
+                    _inboxList(c, groups, filtered),
                   ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 10),
+              sideColumn,
+            ],
           ),
-          const SizedBox(height: 10),
-          GlassCard(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SectionLabel('SMS center settings'),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 230),
-                      child: SizedBox(
-                        width: 230,
-                        child: TextField(
-                          controller: _centerCtrl,
-                          keyboardType: TextInputType.phone,
-                          decoration: const InputDecoration(
-                            labelText: 'Center number',
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 150,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _validity,
-                        decoration: const InputDecoration(
-                          labelText: 'Validity',
-                          isDense: true,
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'twelve_hours',
-                            child: Text('12 hours'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'one_day',
-                            child: Text('1 day'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'one_week',
-                            child: Text('1 week'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'largest',
-                            child: Text('Maximum'),
-                          ),
-                        ],
-                        onChanged: (v) =>
-                            setState(() => _validity = v ?? _validity),
-                      ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Switch(
-                          value: _report,
-                          activeThumbColor: c.accent,
-                          onChanged: (v) => setState(() => _report = v),
-                        ),
-                        Text(
-                          'Reports',
-                          style: TextStyle(
-                            color: c.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                    ElevatedButton(
-                      onPressed: _busy ? null : _saveSettings,
-                      child: const Text('Save'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
