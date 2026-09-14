@@ -44,13 +44,36 @@ class DevicesCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const SectionLabel('Connected devices'),
-              if (devicesAt != null)
-                Text(
-                  timeAgo(devicesAt!),
-                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              Expanded(
+                child: Text(
+                  'CONNECTED DEVICES',
+                  style: TextStyle(
+                    color: c.textMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.6,
+                  ),
                 ),
-              const Spacer(),
+              ),
+              Text(
+                '${devices.length} connected',
+                style: TextStyle(
+                  color: c.textSecondary,
+                  fontSize: 11.5,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (devicesAt != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    timeAgo(devicesAt!),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                  ),
+                ),
               IconButton(
                 tooltip: 'Refresh clients',
                 onPressed: !connected || busy ? null : onRefresh,
@@ -69,9 +92,7 @@ class DevicesCard extends StatelessWidget {
           ),
           if (!open)
             Text(
-              devices.isEmpty
-                  ? 'No stations reported.'
-                  : '${devices.length} client${devices.length == 1 ? '' : 's'} connected.',
+              'No stations reported.',
               style: TextStyle(color: c.textSecondary, fontSize: 12.5),
             )
           else if (busy && devices.isEmpty)
@@ -88,10 +109,17 @@ class DevicesCard extends StatelessWidget {
               ),
             )
           else
-            Column(
-              children: [
-                for (final d in devices)
-                  Padding(
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: ListView.builder(
+                shrinkWrap: true,
+                physics: devices.length > 4
+                    ? const AlwaysScrollableScrollPhysics()
+                    : const NeverScrollableScrollPhysics(),
+                itemCount: devices.length,
+                itemBuilder: (_, index) {
+                  final d = devices[index];
+                  return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -163,15 +191,15 @@ class DevicesCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                  ),
-              ],
+                  );
+                },
+              ),
             ),
         ],
       ),
     );
   }
 }
-
 class MetaRow extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -315,106 +343,3 @@ class DeviceActionsCard extends StatelessWidget {
   }
 }
 
-/// Compact data-cap card under the tiles: the cap constrains the month
-/// usage above, so they share the pane. One header row (label + switch
-/// + save), one control row (unit + size + alert %).
-class DataLimitCard extends StatelessWidget {
-  final bool limitOn;
-  final String limitUnit;
-  final TextEditingController sizeCtrl;
-  final TextEditingController alertCtrl;
-  final bool connected;
-  final ValueChanged<bool>? onToggleOn;
-  final ValueChanged<String>? onUnitChanged;
-  final VoidCallback? onSave;
-
-  const DataLimitCard({
-    super.key,
-    required this.limitOn,
-    required this.limitUnit,
-    required this.sizeCtrl,
-    required this.alertCtrl,
-    required this.connected,
-    this.onToggleOn,
-    this.onUnitChanged,
-    this.onSave,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.zc;
-    return GlassCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const SectionLabel('Data cap'),
-              const Spacer(),
-              Switch(
-                value: limitOn,
-                activeThumbColor: c.accent,
-                onChanged: !connected ? null : onToggleOn,
-              ),
-              const SizedBox(width: 4),
-              ElevatedButton(
-                onPressed: !connected ? null : onSave,
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              PillSwitcher<String>(
-                options: const [
-                  PillOption(
-                    value: 'data',
-                    label: 'Data',
-                    icon: Icons.data_usage_outlined,
-                  ),
-                  PillOption(
-                    value: 'time',
-                    label: 'Time',
-                    icon: Icons.schedule_outlined,
-                  ),
-                ],
-                selected: limitUnit,
-                enabled: connected,
-                onChanged: (v) => onUnitChanged?.call(v),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: sizeCtrl,
-                  enabled: connected,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: limitUnit == 'data'
-                        ? 'Size (modem units)'
-                        : 'Minutes',
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 90,
-                child: TextField(
-                  controller: alertCtrl,
-                  enabled: connected,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Alert %',
-                    isDense: true,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}

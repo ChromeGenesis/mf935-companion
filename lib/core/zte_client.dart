@@ -708,37 +708,6 @@ class ZteClient {
     return _okResult(res.data) ?? res.statusCode == 200;
   }
 
-  /// Data limit settings (raw keys: switch/unit/size/alert_percent).
-  Future<Map<String, dynamic>> getDataLimit() => getStatus(
-    cmds: const [
-      'data_volume_limit_switch',
-      'data_volume_limit_unit',
-      'data_volume_limit_size',
-      'data_volume_alert_percent',
-    ],
-  );
-
-  /// Set the data limit. When [enabled] is false only the switch is sent.
-  Future<bool> setDataLimit({
-    required bool enabled,
-    String unit = 'data',
-    String size = '',
-    String alertPercent = '',
-  }) async {
-    final data = <String, dynamic>{
-      'isTest': 'false',
-      'goformId': 'DATA_LIMIT_SETTING',
-      'data_volume_limit_switch': enabled ? '1' : '0',
-    };
-    if (enabled) {
-      data['data_volume_limit_unit'] = unit;
-      data['data_volume_limit_size'] = size;
-      data['data_volume_alert_percent'] = alertPercent;
-    }
-    final res = await _dio.post('/goform/goform_set_cmd_process', data: data);
-    return _okResult(res.data) ?? res.statusCode == 200;
-  }
-
   /// Attached Wi-Fi stations (station_list, no multi_data — verified live).
   Future<List<AttachedDevice>> getConnectedDevices() async {
     final m = await getStatus(cmds: const ['station_list'], multiData: false);

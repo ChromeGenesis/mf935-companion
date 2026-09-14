@@ -21,11 +21,12 @@ class UssdTab extends StatefulWidget {
   final bool connected;
   final void Function(String) log;
 
-  const UssdTab(
-      {super.key,
-      required this.client,
-      required this.connected,
-      required this.log});
+  const UssdTab({
+    super.key,
+    required this.client,
+    required this.connected,
+    required this.log,
+  });
 
   @override
   State<UssdTab> createState() => _UssdTabState();
@@ -71,7 +72,8 @@ class _UssdTabState extends State<UssdTab> {
     final code = ZteClient.normalizeUssd(_codeCtrl.text);
     final result = await showUssdSavedDialog(
       context,
-      existing: existing ??
+      existing:
+          existing ??
           (code.isEmpty || code == '#' ? null : UssdSaved(code: code)),
     );
     if (result == null || !mounted) return;
@@ -133,11 +135,16 @@ class _UssdTabState extends State<UssdTab> {
       if (!mounted) return;
       setState(() {
         _last = r;
-        _history.insert(0, UssdEntry(code, r.success ? r.text : r.error, r.success));
+        _history.insert(
+          0,
+          UssdEntry(code, r.success ? r.text : r.error, r.success),
+        );
       });
-      widget.log(r.success
-          ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply' : ''})'
-          : 'USSD failed: ${r.error}');
+      widget.log(
+        r.success
+            ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply' : ''})'
+            : 'USSD failed: ${r.error}',
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _history.insert(0, UssdEntry(code, '$e', false)));
@@ -156,8 +163,12 @@ class _UssdTabState extends State<UssdTab> {
       final sent = await widget.client.replyUssd(text);
       if (!sent) {
         if (mounted) {
-          setState(() => _history.insert(
-              0, UssdEntry('↳ $text', 'Modem refused the reply.', false)));
+          setState(
+            () => _history.insert(
+              0,
+              UssdEntry('↳ $text', 'Modem refused the reply.', false),
+            ),
+          );
         }
         widget.log('USSD reply refused');
         return;
@@ -167,7 +178,9 @@ class _UssdTabState extends State<UssdTab> {
       setState(() {
         _last = r;
         _history.insert(
-            0, UssdEntry('↳ $text', r.success ? r.text : r.error, r.success));
+          0,
+          UssdEntry('↳ $text', r.success ? r.text : r.error, r.success),
+        );
         _replyCtrl.clear();
       });
       widget.log(r.success ? 'USSD reply ok' : 'USSD reply failed: ${r.error}');
@@ -206,13 +219,17 @@ class _UssdTabState extends State<UssdTab> {
             style: OutlinedButton.styleFrom(
               padding: EdgeInsets.zero,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
-            child: Text(k,
-                style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700)),
+            child: Text(
+              k,
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
       ],
     );
@@ -220,7 +237,8 @@ class _UssdTabState extends State<UssdTab> {
 
   Widget _sendCard(ZteColors c, bool narrow) {
     final code = _codeCtrl.text;
-    final codeValid = code.trim().isEmpty ||
+    final codeValid =
+        code.trim().isEmpty ||
         ZteClient.isValidUssd(ZteClient.normalizeUssd(code));
     return GlassCard(
       padding: const EdgeInsets.all(14),
@@ -252,15 +270,19 @@ class _UssdTabState extends State<UssdTab> {
                     ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Text('Send'),
               ),
               const SizedBox(width: 8),
               IconButton(
                 tooltip: 'Backspace',
                 onPressed: _backspace,
-                icon:
-                    Icon(Icons.backspace_outlined, color: c.textMuted, size: 20),
+                icon: Icon(
+                  Icons.backspace_outlined,
+                  color: c.textMuted,
+                  size: 20,
+                ),
               ),
               OutlinedButton(
                 onPressed: _busy ? null : _cancel,
@@ -346,9 +368,10 @@ class _UssdTabState extends State<UssdTab> {
               const Spacer(),
               InkWell(
                 onTap: () => setState(() => _history.clear()),
-                child: Text('clear',
-                    style:
-                        TextStyle(color: c.textMuted, fontSize: 11.5)),
+                child: Text(
+                  'clear',
+                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                ),
               ),
             ],
           ),
@@ -356,58 +379,68 @@ class _UssdTabState extends State<UssdTab> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Center(
-                  child: Text('No USSD yet this session.',
-                      style: TextStyle(color: c.textMuted))),
+                child: Text(
+                  'No USSD yet this session.',
+                  style: TextStyle(color: c.textMuted),
+                ),
+              ),
             )
           else
-            ..._history.take(50).map((h) => InkWell(
-                  onTap: h.ok && h.request.startsWith('*')
-                      ? () {
-                          _codeCtrl.text = h.request;
-                          _send();
-                        }
-                      : null,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              h.ok
-                                  ? Icons.check_circle_outline
-                                  : Icons.error_outline,
-                              size: 14,
-                              color: h.ok ? c.live : c.danger,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                '${h.request} · ${ZteClient.timeAgo(h.at)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    color: c.textMuted,
-                                    fontSize: 10.5),
+            ..._history
+                .take(50)
+                .map(
+                  (h) => InkWell(
+                    onTap: h.ok && h.request.startsWith('*')
+                        ? () {
+                            _codeCtrl.text = h.request;
+                            _send();
+                          }
+                        : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                h.ok
+                                    ? Icons.check_circle_outline
+                                    : Icons.error_outline,
+                                size: 14,
+                                color: h.ok ? c.live : c.danger,
                               ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  '${h.request} · ${ZteClient.timeAgo(h.at)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: c.textMuted,
+                                    fontSize: 10.5,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            h.reply.replaceAll('\n', ' '),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: c.textPrimary,
+                              fontSize: 12.5,
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          h.reply.replaceAll('\n', ' '),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: c.textPrimary, fontSize: 12.5),
-                        ),
-                        const SizedBox(height: 6),
-                        Divider(color: c.borderSubtle, height: 1),
-                      ],
+                          ),
+                          const SizedBox(height: 6),
+                          Divider(color: c.borderSubtle, height: 1),
+                        ],
+                      ),
                     ),
                   ),
-                )),
+                ),
         ],
       ),
     );
@@ -417,9 +450,10 @@ class _UssdTabState extends State<UssdTab> {
   Widget build(BuildContext context) {
     if (!widget.connected) {
       return const EmptyState(
-          icon: Icons.dialpad_outlined,
-          title: 'Log in to use USSD',
-          subtitle: 'Balance checks and carrier menus live here.');
+        icon: Icons.dialpad_outlined,
+        title: 'Log in to use USSD',
+        subtitle: 'Balance checks and carrier menus live here.',
+      );
     }
     return LayoutBuilder(
       builder: (ctx, constraints) {
@@ -431,9 +465,7 @@ class _UssdTabState extends State<UssdTab> {
             children: [
               Expanded(
                 flex: 7,
-                child: SingleChildScrollView(
-                  child: _sendCard(c, false),
-                ),
+                child: SingleChildScrollView(child: _sendCard(c, false)),
               ),
               const SizedBox(width: 10),
               Expanded(

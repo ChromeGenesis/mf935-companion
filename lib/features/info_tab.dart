@@ -10,11 +10,12 @@ class InfoTab extends StatefulWidget {
   final bool connected;
   final void Function(String) log;
 
-  const InfoTab(
-      {super.key,
-      required this.client,
-      required this.connected,
-      required this.log});
+  const InfoTab({
+    super.key,
+    required this.client,
+    required this.connected,
+    required this.log,
+  });
 
   @override
   State<InfoTab> createState() => _InfoTabState();
@@ -169,8 +170,10 @@ class _InfoTabState extends State<InfoTab> {
           const SizedBox(width: 8),
           SizedBox(
             width: 120,
-            child: Text(label,
-                style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+            child: Text(
+              label,
+              style: TextStyle(color: c.textMuted, fontSize: 12.5),
+            ),
           ),
           Expanded(
             child: SelectableText(
@@ -192,8 +195,11 @@ class _InfoTabState extends State<InfoTab> {
     final c = context.zc;
     if (!widget.connected) {
       return Center(
-          child: Text('Log in to see device info.',
-              style: TextStyle(color: c.textMuted)));
+        child: Text(
+          'Log in to see device info.',
+          style: TextStyle(color: c.textMuted),
+        ),
+      );
     }
     final rxMb = ZteClient.bytesToMb(_stats['monthly_rx_bytes']);
     final txMb = ZteClient.bytesToMb(_stats['monthly_tx_bytes']);
@@ -219,28 +225,55 @@ class _InfoTabState extends State<InfoTab> {
               ),
             ],
           ),
-          _row('Model', 'ZTE MF935 (MTN Broadband 4G MiFi)',
-              icon: Icons.memory_outlined),
+          _row(
+            'Model',
+            'ZTE MF935 (MTN Broadband 4G MiFi)',
+            icon: Icons.memory_outlined,
+          ),
           _row('IMEI', '${_info['imei'] ?? ''}', icon: Icons.fingerprint),
-          _row('IMSI', '${_info['sim_imsi'] ?? ''}', icon: Icons.sim_card_outlined),
-          _row('Hardware', '${_info['hardware_version'] ?? ''}',
-              icon: Icons.developer_board_outlined),
-          _row('Web UI', '${_info['wa_inner_version'] ?? ''}',
-              icon: Icons.web_outlined),
-          _row('Firmware', '${_info['cr_version'] ?? ''}',
-              icon: Icons.cable_outlined),
+          _row(
+            'IMSI',
+            '${_info['sim_imsi'] ?? ''}',
+            icon: Icons.sim_card_outlined,
+          ),
+          _row(
+            'Hardware',
+            '${_info['hardware_version'] ?? ''}',
+            icon: Icons.developer_board_outlined,
+          ),
+          _row(
+            'Web UI',
+            '${_info['wa_inner_version'] ?? ''}',
+            icon: Icons.web_outlined,
+          ),
+          _row(
+            'Firmware',
+            '${_info['cr_version'] ?? ''}',
+            icon: Icons.cable_outlined,
+          ),
           _row('SSID', '${_info['SSID1'] ?? ''}', icon: Icons.wifi),
-          _row('LAN IP', '${_info['lan_ipaddr'] ?? ''}',
-              icon: Icons.router_outlined),
-          _row('WAN IP', '${_info['wan_ipaddr'] ?? ''}',
-              icon: Icons.public_outlined),
+          _row(
+            'LAN IP',
+            '${_info['lan_ipaddr'] ?? ''}',
+            icon: Icons.router_outlined,
+          ),
+          _row(
+            'WAN IP',
+            '${_info['wan_ipaddr'] ?? ''}',
+            icon: Icons.public_outlined,
+          ),
           _row('Link', '${_info['ppp_status'] ?? ''}', icon: Icons.link),
-          _row('Network', '${_info['network_type'] ?? ''}',
-              icon: Icons.network_cell_outlined),
-          _row('RSSI / RSRP',
-              '${_info['rssi'] ?? ''} / ${_info['lte_rsrp'] ?? ''} dBm',
-              icon: Icons.signal_cellular_alt,
-              valueColor: bars >= 3 ? c.live : c.accentText),
+          _row(
+            'Network',
+            '${_info['network_type'] ?? ''}',
+            icon: Icons.network_cell_outlined,
+          ),
+          _row(
+            'RSSI / RSRP',
+            '${_info['rssi'] ?? ''} / ${_info['lte_rsrp'] ?? ''} dBm',
+            icon: Icons.signal_cellular_alt,
+            valueColor: bars >= 3 ? c.live : c.accentText,
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
@@ -249,8 +282,10 @@ class _InfoTabState extends State<InfoTab> {
                 const SizedBox(width: 8),
                 SizedBox(
                   width: 120,
-                  child: Text('Signal',
-                      style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+                  child: Text(
+                    'Signal',
+                    style: TextStyle(color: c.textMuted, fontSize: 12.5),
+                  ),
                 ),
                 SignalBars(level: bars, height: 16),
                 const SizedBox(width: 8),
@@ -261,8 +296,11 @@ class _InfoTabState extends State<InfoTab> {
               ],
             ),
           ),
-          _row('Max clients', '${_info['MAX_Access_num'] ?? ''}',
-              icon: Icons.language_outlined),
+          _row(
+            'Max clients',
+            '${_info['MAX_Access_num'] ?? ''}',
+            icon: Icons.language_outlined,
+          ),
         ],
       ),
     );
@@ -284,8 +322,9 @@ class _InfoTabState extends State<InfoTab> {
                 ),
               const SizedBox(width: 8),
               TextButton(
-                  onPressed: _busy ? null : _resetCounter,
-                  child: const Text('Reset counter')),
+                onPressed: _busy ? null : _resetCounter,
+                child: const Text('Reset counter'),
+              ),
             ],
           ),
           GridView.count(
@@ -299,9 +338,15 @@ class _InfoTabState extends State<InfoTab> {
               _miniStat(c, ZteClient.formatDataVolume(rxMb), 'month down'),
               _miniStat(c, ZteClient.formatDataVolume(txMb), 'month up'),
               _miniStat(
-                  c, ZteClient.formatDataVolume(rxMb + txMb), 'month total'),
-              _miniStat(c, '${(mtime / 3600).toStringAsFixed(1)} h',
-                  'month online'),
+                c,
+                ZteClient.formatDataVolume(rxMb + txMb),
+                'month total',
+              ),
+              _miniStat(
+                c,
+                '${(mtime / 3600).toStringAsFixed(1)} h',
+                'month online',
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -309,42 +354,40 @@ class _InfoTabState extends State<InfoTab> {
           _liveRow(c, 'Live up', ZteClient.formatRate(rtx)),
           const SizedBox(height: 8),
           _liveRow(c, 'Live total', ZteClient.formatRate(rrx + rtx)),
-          _liveRow(c, 'Daily average down',
-              "${(rxMb / (DateTime.now().day)).toStringAsFixed(1)} MB"),
+          _liveRow(
+            c,
+            'Daily average down',
+            "${(rxMb / (DateTime.now().day)).toStringAsFixed(1)} MB",
+          ),
         ],
       ),
     );
 
-    // Two columns when the tab earns the width, stacked on narrow.
-    // Stretch-to-bottom uses the ConstrainedBox(minHeight) + IntrinsicHeight
-    // pattern so both cards share equal height on desktop.
+    // Two columns when the tab earns the width, stacked on narrow. The
+    // scroll view owns vertical sizing, so avoid intrinsic measurement here.
     return LayoutBuilder(
       builder: (_, cons) {
         if (cons.maxWidth <= 720) {
           return SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: 12),
             child: Column(
-              children: [
-                deviceCard,
-                const SizedBox(height: 10),
-                trafficCard,
-              ],
+              children: [deviceCard, const SizedBox(height: 10), trafficCard],
             ),
           );
         }
         return SingleChildScrollView(
           padding: const EdgeInsets.only(bottom: 12),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: cons.maxHeight - 12),
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 11, child: deviceCard),
-                  const SizedBox(width: 10),
-                  Expanded(flex: 10, child: trafficCard),
-                ],
-              ),
+          child: SizedBox(
+            height: cons.hasBoundedHeight && cons.maxHeight > 572
+                ? cons.maxHeight - 12
+                : 560,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 11, child: deviceCard),
+                const SizedBox(width: 10),
+                Expanded(flex: 10, child: trafficCard),
+              ],
             ),
           ),
         );

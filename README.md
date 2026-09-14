@@ -14,7 +14,7 @@ without the browser.
   multi-select + bulk actions, swipe delete, send, center settings
 - **USSD** — dialpad keypad, remembered codes, `*…#` normalization,
   interactive menu replies with next-page follow, session history
-- **Info** — IMEI/IMSI/firmware/WAN, traffic stats + counter reset, data limit
+- **Info** — IMEI/IMSI/firmware/WAN, traffic stats + counter reset
 - **Device** — connected clients, power-save, reboot/shutdown (confirmed)
 - **Alerts** — low/full battery, no-signal + recovery, new SMS, inbox nearly
   full, data usage, billing-month rollover, bundle expiry, unreachable modem

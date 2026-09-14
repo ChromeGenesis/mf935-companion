@@ -20,7 +20,10 @@ void main() {
   });
 
   test('USSD balance parsing handles GB and MB', () {
-    expect(ZteClient.parseDataBalanceMb('Your balance is 2.3GB remaining'), 2.3 * 1024);
+    expect(
+      ZteClient.parseDataBalanceMb('Your balance is 2.3GB remaining'),
+      2.3 * 1024,
+    );
     expect(ZteClient.parseDataBalanceMb('450MB left'), 450);
     expect(ZteClient.parseDataBalanceMb('no match here'), isNull);
   });
@@ -110,7 +113,8 @@ void main() {
   });
 
   test('Data bundle parsing (*323*1# reply shape)', () {
-    const reply = 'Your Balances Are:*Binge Bundle: 0.00MB till '
+    const reply =
+        'Your Balances Are:*Binge Bundle: 0.00MB till '
         '15-09-2026 05:09:18,\nWeekly Bundle: 29990.35MB till '
         '28-09-2026 02:09:12,\nYouTube Night:*n Next';
     final bundles = ZteClient.parseDataBundles(reply);
@@ -130,13 +134,16 @@ void main() {
     expect(snap0.bundles[1].name, 'Binge Bundle');
     expect(snap0.nextExpiry?.name, 'Weekly Bundle');
     // GB/KB units convert; menu prompts without amounts are skipped.
-    final units = ZteClient.parseDataBundles('A: 1.5GB till 01-01-2030 00:00:00, B: 512KB');
+    final units = ZteClient.parseDataBundles(
+      'A: 1.5GB till 01-01-2030 00:00:00, B: 512KB',
+    );
     expect(units[0].mb, 1536);
     expect(units[1].mb, 0.5);
     expect(units[1].expiry, isNull);
     // MTN shape: @rate noise, "expires", slash dates without times,
     // unit-less lines skipped.
-    const mtn = 'Your data balances:\nDaily: 20.59MB @N1.0/MB expires '
+    const mtn =
+        'Your data balances:\nDaily: 20.59MB @N1.0/MB expires '
         '14/09/2026\nPulse point balance: 187.50. Expires 31/12/2026\n'
         'InstaTop: NO.\nEnjoy comedy. Dial *306*15#.';
     final mb = ZteClient.parseDataBundles(mtn);
@@ -147,25 +154,38 @@ void main() {
     // Fallback layers: unstructured amounts still yield a quota, and a
     // reply with no amounts at all keeps its raw text (never blank).
     final loose = ZteClient.resolveDataBalance(
-        'Data: 500MB left, hurry.', DateTime.now());
+      'Data: 500MB left, hurry.',
+      DateTime.now(),
+    );
     expect(loose.bundles.length, 1);
     expect(loose.bundles[0].mb, 500);
     expect(loose.bundles[0].expiry, isNull);
     final weird = ZteClient.resolveDataBalance(
-        'Hello, quota plenty, dial 123.', DateTime.now());
+      'Hello, quota plenty, dial 123.',
+      DateTime.now(),
+    );
     expect(weird.bundles, isEmpty);
     expect(weird.raw, isNotEmpty);
     expect(weird.totalMb, 0);
     final snap = DataBalance(
-        bundles: bundles, raw: reply, fetchedAt: DateTime(2026, 9, 13));
-    final back = DataBalance.fromJson(Map<String, dynamic>.from(
-        jsonDecode(jsonEncode(snap.toJson())) as Map));
+      bundles: bundles,
+      raw: reply,
+      fetchedAt: DateTime(2026, 9, 13),
+    );
+    final back = DataBalance.fromJson(
+      Map<String, dynamic>.from(jsonDecode(jsonEncode(snap.toJson())) as Map),
+    );
     expect(back.totalMb, closeTo(snap.totalMb, 0.01));
     expect(back.bundles.length, 2);
   });
 
   test('Countdown formatter', () {
-    expect(formatCountdown(const Duration(days: 13, hours: 4, minutes: 12, seconds: 33)), '13d 04:12:33');
+    expect(
+      formatCountdown(
+        const Duration(days: 13, hours: 4, minutes: 12, seconds: 33),
+      ),
+      '13d 04:12:33',
+    );
     expect(formatCountdown(const Duration(hours: 5)), '05:00:00');
     expect(formatCountdown(const Duration(seconds: 90)), '00:01:30');
     expect(formatCountdown(Duration.zero), 'expired');
@@ -173,10 +193,19 @@ void main() {
   });
 
   test('SMS grouping keeps first-seen sender order', () {
-    SmsMessage m(String id, String n) =>
-        SmsMessage(id: id, number: n, content: 'x', tag: '0', date: '', draftGroupId: '');
-    final groups = groupSmsBySender(
-        [m('1', 'Airtel'), m('2', 'SmartCash'), m('3', 'Airtel')]);
+    SmsMessage m(String id, String n) => SmsMessage(
+      id: id,
+      number: n,
+      content: 'x',
+      tag: '0',
+      date: '',
+      draftGroupId: '',
+    );
+    final groups = groupSmsBySender([
+      m('1', 'Airtel'),
+      m('2', 'SmartCash'),
+      m('3', 'Airtel'),
+    ]);
     expect(groups.map((g) => g.key).toList(), ['Airtel', 'SmartCash']);
     expect(groups.first.value.map((x) => x.id).toList(), ['1', '3']);
     expect(groupSmsBySender([]), isEmpty);

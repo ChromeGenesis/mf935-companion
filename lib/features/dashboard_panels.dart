@@ -103,9 +103,7 @@ class ConnectionPanel extends StatelessWidget {
                 child: SelectableText(
                   loginMessage,
                   style: TextStyle(
-                    color: loginOk == true
-                        ? c.live
-                        : const Color(0xFFFCA5A5),
+                    color: loginOk == true ? c.live : const Color(0xFFFCA5A5),
                     fontSize: 12,
                     height: 1.4,
                   ),

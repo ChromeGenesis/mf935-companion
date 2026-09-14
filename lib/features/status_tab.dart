@@ -54,19 +54,12 @@ class _StatusTabState extends State<StatusTab> {
   Timer? _balanceTimer;
   final Set<String> _expiryNotified = {};
 
-  // Data cap (firmware-side limit): lives here next to the month-usage
-  // tile it constrains, not in Info.
-  bool _limitOn = false;
-  String _limitUnit = 'data';
-  final _limitSizeCtrl = TextEditingController();
-  final _limitAlertCtrl = TextEditingController();
-
   // Device management (consolidated from the Device tab): connected
   // clients, power-save presets, reboot/shutdown.
   List<AttachedDevice> _devices = [];
   bool _devicesBusy = false;
   DateTime? _devicesAt;
-  bool _devicesOpen = false;
+  bool _devicesOpen = true;
   String _powerSave = '';
   bool _powerBusy = false;
 
@@ -91,8 +84,6 @@ class _StatusTabState extends State<StatusTab> {
   @override
   void dispose() {
     _balanceTimer?.cancel();
-    _limitSizeCtrl.dispose();
-    _limitAlertCtrl.dispose();
     super.dispose();
   }
 
@@ -101,7 +92,6 @@ class _StatusTabState extends State<StatusTab> {
     _balanceTimer = Timer.periodic(_balanceEvery, (_) => _refreshBalance());
     _refreshDevices();
     _refreshBalance();
-    _loadLimit();
     _loadPowerSave();
   }
 
@@ -252,39 +242,6 @@ class _StatusTabState extends State<StatusTab> {
     }
   }
 
-  /// Firmware data cap: load on connect, save on demand.
-  Future<void> _loadLimit() async {
-    if (!widget.connected) return;
-    try {
-      final limit = await widget.client.getDataLimit();
-      if (!mounted) return;
-      setState(() {
-        _limitOn = '${limit['data_volume_limit_switch'] ?? ''}' == '1';
-        final unit = '${limit['data_volume_limit_unit'] ?? ''}';
-        _limitUnit = unit == 'time' ? 'time' : 'data';
-        _limitSizeCtrl.text = '${limit['data_volume_limit_size'] ?? ''}';
-        _limitAlertCtrl.text = '${limit['data_volume_alert_percent'] ?? ''}';
-      });
-    } catch (e) {
-      widget.log('data limit load failed: $e');
-    }
-  }
-
-  Future<void> _saveLimit() async {
-    try {
-      final ok = await widget.client.setDataLimit(
-        enabled: _limitOn,
-        unit: _limitUnit,
-        size: _limitSizeCtrl.text.trim(),
-        alertPercent: _limitAlertCtrl.text.trim(),
-      );
-      widget.log(ok ? 'data limit saved' : 'data limit refused');
-    } catch (e) {
-      widget.log('data limit failed: $e');
-    }
-    _loadLimit();
-  }
-
   @override
   Widget build(BuildContext context) {
     final s = widget.status;
@@ -314,10 +271,10 @@ class _StatusTabState extends State<StatusTab> {
           signal: signal,
           unreadText: _tileText(s['sms_unread_num']),
           unreadAlive: widget.connected && (unread ?? 0) > 0,
-          onUnreadTap:
-              widget.onJumpTab == null ? null : () => widget.onJumpTab!(1),
-          onRefreshNow:
-              !widget.connected ? null : () => widget.onRefreshNow(),
+          onUnreadTap: widget.onJumpTab == null
+              ? null
+              : () => widget.onJumpTab!(1),
+          onRefreshNow: !widget.connected ? null : () => widget.onRefreshNow(),
           balance: BalanceSection(
             balance: _balance,
             busy: _balanceBusy,
@@ -364,33 +321,42 @@ class _StatusTabState extends State<StatusTab> {
           ],
         ),
         const SizedBox(height: 10),
-        DataLimitCard(
-          limitOn: _limitOn,
-          limitUnit: _limitUnit,
-          sizeCtrl: _limitSizeCtrl,
-          alertCtrl: _limitAlertCtrl,
-          connected: widget.connected,
-          onToggleOn: (v) => setState(() => _limitOn = v),
-          onUnitChanged: (v) => setState(() => _limitUnit = v),
-          onSave: _saveLimit,
-        ),
-        const SizedBox(height: 10),
-        DevicesCard(
-          devices: _devices,
-          devicesAt: _devicesAt,
-          busy: _devicesBusy,
-          open: _devicesOpen,
-          connected: widget.connected,
-          onRefresh: _refreshDevices,
-          onToggleOpen: () => setState(() => _devicesOpen = !_devicesOpen),
-        ),
-        const SizedBox(height: 10),
-        PowerCard(
-          powerSave: _powerSave,
-          busy: _powerBusy,
-          connected: widget.connected,
-          onChanged: (v) => setState(() => _powerSave = v),
-          onApply: _applyPowerSave,
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final sideBySide = constraints.maxWidth >= 560;
+            final devices = DevicesCard(
+              devices: _devices,
+              devicesAt: _devicesAt,
+              busy: _devicesBusy,
+              open: _devicesOpen,
+              connected: widget.connected,
+              onRefresh: _refreshDevices,
+              onToggleOpen: () => setState(() => _devicesOpen = !_devicesOpen),
+            );
+            final power = PowerCard(
+              powerSave: _powerSave,
+              busy: _powerBusy,
+              connected: widget.connected,
+              onChanged: (v) => setState(() => _powerSave = v),
+              onApply: _applyPowerSave,
+            );
+            if (!sideBySide) {
+              return Column(
+                children: [devices, const SizedBox(height: 10), power],
+              );
+            }
+            return SizedBox(
+              height: 240,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 7, child: devices),
+                  const SizedBox(width: 10),
+                  Expanded(flex: 3, child: power),
+                ],
+              ),
+            );
+          },
         ),
         const SizedBox(height: 10),
         DeviceActionsCard(

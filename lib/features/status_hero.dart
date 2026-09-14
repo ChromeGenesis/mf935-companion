@@ -197,10 +197,7 @@ class StatusHero extends StatelessWidget {
                       netLine,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: c.textSecondary,
-                        fontSize: 12.5,
-                      ),
+                      style: TextStyle(color: c.textSecondary, fontSize: 12.5),
                     ),
                     const SizedBox(height: 8),
                     Row(

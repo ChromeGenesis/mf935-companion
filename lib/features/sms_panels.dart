@@ -122,10 +122,7 @@ class SmsInboxHeader extends StatelessWidget {
               onChanged: onStoreChanged,
             ),
             const Spacer(),
-            Text(
-              capLine,
-              style: TextStyle(color: c.textMuted, fontSize: 11.5),
-            ),
+            Text(capLine, style: TextStyle(color: c.textMuted, fontSize: 11.5)),
           ],
         ),
         const SizedBox(height: 10),

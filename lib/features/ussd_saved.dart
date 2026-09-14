@@ -24,10 +24,8 @@ class UssdSaved {
 
   Map<String, dynamic> toJson() => {'code': code, 'label': label};
 
-  factory UssdSaved.fromJson(Map<String, dynamic> j) => UssdSaved(
-    code: '${j['code'] ?? ''}',
-    label: '${j['label'] ?? ''}',
-  );
+  factory UssdSaved.fromJson(Map<String, dynamic> j) =>
+      UssdSaved(code: '${j['code'] ?? ''}', label: '${j['label'] ?? ''}');
 }
 
 const _savedKey = 'ussd_saved';
@@ -62,9 +60,10 @@ Future<void> saveUssdSaved(List<UssdSaved> saved) async {
 List<UssdSaved> rememberUssdCode(List<UssdSaved> saved, String code) {
   final existing = saved.where((s) => s.code == code).firstOrNull;
   final entry = UssdSaved(code: code, label: existing?.label ?? '');
-  return [entry, ...saved.where((s) => s.code != code)]
-      .take(_maxSaved)
-      .toList();
+  return [
+    entry,
+    ...saved.where((s) => s.code != code),
+  ].take(_maxSaved).toList();
 }
 
 /// Insert-or-replace a shortcut (manual add / edit), capped.
@@ -285,15 +284,16 @@ class _UssdFormState extends State<_UssdForm> {
   void _submit() {
     final code = ZteClient.normalizeUssd(_codeCtrl.text);
     if (!ZteClient.isValidUssd(code)) return;
-    Navigator.of(context).pop(
-      UssdSaved(code: code, label: _labelCtrl.text.trim()),
-    );
+    Navigator.of(
+      context,
+    ).pop(UssdSaved(code: code, label: _labelCtrl.text.trim()));
   }
 
   @override
   Widget build(BuildContext context) {
     final code = _codeCtrl.text;
-    final valid = code.trim().isEmpty ||
+    final valid =
+        code.trim().isEmpty ||
         ZteClient.isValidUssd(ZteClient.normalizeUssd(code));
     return Column(
       mainAxisSize: MainAxisSize.min,

@@ -336,7 +336,7 @@ class _DashboardPageState extends State<DashboardPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          flex: 11,
+          flex: 12,
           child: SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: 4),
             child: left,
@@ -344,7 +344,7 @@ class _DashboardPageState extends State<DashboardPage>
         ),
         const SizedBox(width: 12),
         Expanded(
-          flex: 9,
+          flex: 8,
           child: Column(
             children: [
               conn,
@@ -446,17 +446,19 @@ class _DashboardPageState extends State<DashboardPage>
                 const SizedBox(height: 12),
                 // ── Tab content ──
                 Expanded(
-child: _tab == 0
-                      ? _statusBody(StatusTab(
-                          client: _client,
-                          connected: _connected,
-                          status: _status,
-                          log: _logLine,
-                          notify: _notifyNow,
-                          onRefreshNow: _refreshNow,
-                          balanceFeed: _balanceFeed,
-                          onJumpTab: (i) => setState(() => _tab = i),
-                        ))
+                  child: _tab == 0
+                      ? _statusBody(
+                          StatusTab(
+                            client: _client,
+                            connected: _connected,
+                            status: _status,
+                            log: _logLine,
+                            notify: _notifyNow,
+                            onRefreshNow: _refreshNow,
+                            balanceFeed: _balanceFeed,
+                            onJumpTab: (i) => setState(() => _tab = i),
+                          ),
+                        )
                       : _tab == 1
                       ? SmsTab(
                           client: _client,
