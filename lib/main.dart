@@ -10,6 +10,7 @@ import 'poller.dart';
 import 'device_tab.dart';
 import 'info_tab.dart';
 import 'notifications.dart';
+import 'sidebar.dart';
 import 'sms_tab.dart';
 import 'status_tab.dart';
 import 'theme.dart';
@@ -25,7 +26,7 @@ Future<void> main() async {
   await windowManager.ensureInitialized();
   await windowManager.setPreventClose(true);
   await windowManager.setTitle('MF935 Companion');
-  await windowManager.setMinimumSize(const Size(980, 700));
+  await windowManager.setMinimumSize(const Size(1060, 700));
 
   const initSettings = InitializationSettings(
     linux: LinuxInitializationSettings(defaultActionName: 'Open'),
@@ -90,7 +91,11 @@ class _DashboardPageState extends State<DashboardPage>
   bool? _loginOk;
   bool _busy = false;
   int _tab = 0;
-  bool _narrow = false; // <640px: stack panes, dialer-first USSD
+  bool _narrow = false; // <640px: bottom nav; otherwise sidebar
+  // Published balance feed (StatusTab writes, global strip reads).
+  final ValueNotifier<DataBalance?> _balanceFeed = ValueNotifier<DataBalance?>(
+    null,
+  );
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
 
@@ -131,6 +136,7 @@ class _DashboardPageState extends State<DashboardPage>
     windowManager.removeListener(this);
     trayManager.removeListener(this);
     _cooldownTimer?.cancel();
+    _balanceFeed.dispose();
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
@@ -298,6 +304,71 @@ class _DashboardPageState extends State<DashboardPage>
     _logLine('poller started (30s) — minimize to tray to keep polling');
   }
 
+  /// Shell: sidebar on desktop, bare content on mobile (which gets
+  /// the bottom nav instead).
+  Widget _shell(Widget content) {
+    if (_narrow) return content;
+    return Row(
+      children: [
+        AppSidebar(
+          selected: _tab,
+          onSelect: (i) => setState(() => _tab = i),
+          connected: _connected,
+          gatewayIp: _client.gatewayIp,
+        ),
+        Expanded(child: content),
+      ],
+    );
+  }
+
+  /// Global countdown strip: the "when does my data die" answer, visible
+  /// on every tab. Tapping jumps to Status. Hidden when nothing to show.
+  Widget _balanceStrip() {
+    return ValueListenableBuilder<DataBalance?>(
+      valueListenable: _balanceFeed,
+      builder: (ctx, b, _) {
+        final next = b?.nextExpiry;
+        if (!_connected ||
+            next == null ||
+            next.expiry == null ||
+            !next.expiry!.isAfter(DateTime.now())) {
+          return const SizedBox.shrink();
+        }
+        final c = ctx.zc;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: InkWell(
+            onTap: () => setState(() => _tab = 0),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: c.accent.withAlpha(22),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: c.accent.withAlpha(90)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_bottom, size: 14, color: c.accentText),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(
+                      '${next.name} · ${ZteClient.formatDataVolume(next.mb)} · ends in ',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                    ),
+                  ),
+                  CountdownText(target: next.expiry!),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   /// Status panes: side-by-side on desktop, stacked + scrollable on
   /// narrow screens. One composition path (SSOT) — no duplicated cards.
   Widget _statusFlex(List<Widget> panes) {
@@ -365,294 +436,309 @@ class _DashboardPageState extends State<DashboardPage>
 
     return Scaffold(
       body: AmbientBackground(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          child: Column(
-            children: [
-              // ── Header ──
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: c.accent.withAlpha(30),
-                      borderRadius: BorderRadius.circular(11),
-                      border: Border.all(color: c.accent.withAlpha(110)),
+        child: _shell(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+            child: Column(
+              children: [
+                // ── Header ──
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: c.accent.withAlpha(30),
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: c.accent.withAlpha(110)),
+                      ),
+                      child: Icon(
+                        Icons.wifi_tethering,
+                        color: c.accentText,
+                        size: 20,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.wifi_tethering,
-                      color: c.accentText,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'MF935 Companion',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: c.textPrimary,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'MF935 Companion',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: c.textPrimary,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'ZTE MiFi dashboard · battery · signal · data',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  pill,
-                ],
-              ),
-              const SizedBox(height: 12),
-              // ── Tab content ──
-              Expanded(
-                child: _tab == 0
-                    ? _statusFlex([
-                        // ── Left: status (owns its balance lifecycle) ──
-                        _pane(
-                          flex: 11,
-                          child: StatusTab(
-                            client: _client,
-                            connected: _connected,
-                            status: _status,
-                            log: _logLine,
-                            notify: _notifyNow,
-                            onRefreshNow: _refreshNow,
+                          Text(
+                            'ZTE MiFi dashboard · battery · signal · data',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: c.textMuted,
+                              fontSize: 11.5,
+                            ),
                           ),
-                        ),
-                        // ── Right: actions ──
-                        _pane(
-                          flex: 9,
-                          child: Column(
-                            children: [
-                              GlassCard(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const SectionLabel('Connection'),
-                                    TextField(
-                                      controller: _ipCtrl,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Gateway IP',
-                                        hintText: '192.168.0.1',
-                                        isDense: true,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    TextField(
-                                      controller: _passCtrl,
-                                      obscureText: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Admin password',
-                                        hintText: 'Sticker on the MiFi',
-                                        isDense: true,
-                                      ),
-                                      onSubmitted: (_) =>
-                                          _busy ? null : _doLogin(),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: ElevatedButton.icon(
-                                            onPressed:
-                                                (_busy || _cooldownLeft > 0)
-                                                ? null
-                                                : _doLogin,
-                                            icon: const Icon(
-                                              Icons.login,
-                                              size: 15,
-                                            ),
-                                            label: Text(
-                                              _cooldownLeft > 0
-                                                  ? 'Wait ${_cooldownLeft}s'
-                                                  : _connected
-                                                  ? 'Re-login'
-                                                  : 'Login & poll',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: OutlinedButton.icon(
-                                            onPressed: _busy
-                                                ? null
-                                                : _testConnection,
-                                            icon: const Icon(
-                                              Icons.radar,
-                                              size: 15,
-                                            ),
-                                            label: const Text(
-                                              'Test',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_loginMessage.isNotEmpty) ...[
-                                      const SizedBox(height: 8),
-                                      ConstrainedBox(
-                                        constraints: const BoxConstraints(
-                                          maxHeight: 64,
-                                        ),
-                                        child: SingleChildScrollView(
-                                          child: SelectableText(
-                                            _loginMessage,
-                                            style: TextStyle(
-                                              color: _loginOk == true
-                                                  ? c.live
-                                                  : const Color(0xFFFCA5A5),
-                                              fontSize: 12,
-                                              height: 1.4,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              _fillPane(
-                                child: GlassCard(
-                                  padding: const EdgeInsets.all(12),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    pill,
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _balanceStrip(),
+                // ── Tab content ──
+                Expanded(
+                  child: _tab == 0
+                      ? _statusFlex([
+                          // ── Left: status (owns its balance lifecycle) ──
+                          _pane(
+                            flex: 11,
+                            child: StatusTab(
+                              client: _client,
+                              connected: _connected,
+                              status: _status,
+                              log: _logLine,
+                              notify: _notifyNow,
+                              onRefreshNow: _refreshNow,
+                              balanceFeed: _balanceFeed,
+                            ),
+                          ),
+                          // ── Right: actions ──
+                          _pane(
+                            flex: 9,
+                            child: Column(
+                              children: [
+                                GlassCard(
+                                  padding: const EdgeInsets.all(14),
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      const SectionLabel('Connection'),
+                                      TextField(
+                                        controller: _ipCtrl,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Gateway IP',
+                                          hintText: '192.168.0.1',
+                                          isDense: true,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      TextField(
+                                        controller: _passCtrl,
+                                        obscureText: true,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Admin password',
+                                          hintText: 'Sticker on the MiFi',
+                                          isDense: true,
+                                        ),
+                                        onSubmitted: (_) =>
+                                            _busy ? null : _doLogin(),
+                                      ),
+                                      const SizedBox(height: 10),
                                       Row(
                                         children: [
-                                          Text(
-                                            'DIAGNOSTICS',
-                                            style: TextStyle(
-                                              color: c.textMuted,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w700,
-                                              letterSpacing: 1.6,
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed:
+                                                  (_busy || _cooldownLeft > 0)
+                                                  ? null
+                                                  : _doLogin,
+                                              icon: const Icon(
+                                                Icons.login,
+                                                size: 15,
+                                              ),
+                                              label: Text(
+                                                _cooldownLeft > 0
+                                                    ? 'Wait ${_cooldownLeft}s'
+                                                    : _connected
+                                                    ? 'Re-login'
+                                                    : 'Login & poll',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
                                             ),
                                           ),
-                                          const Spacer(),
-                                          InkWell(
-                                            onTap: () =>
-                                                setState(() => _log.clear()),
-                                            child: Text(
-                                              'clear',
-                                              style: TextStyle(
-                                                color: c.textMuted,
-                                                fontSize: 11.5,
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: OutlinedButton.icon(
+                                              onPressed: _busy
+                                                  ? null
+                                                  : _testConnection,
+                                              icon: const Icon(
+                                                Icons.radar,
+                                                size: 15,
+                                              ),
+                                              label: const Text(
+                                                'Test',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 6),
-                                      Expanded(
-                                        child: _log.isEmpty
-                                            ? Text(
-                                                'No events yet — log in to begin.',
-                                                style: TextStyle(
-                                                  color: c.textMuted,
-                                                  fontSize: 12,
-                                                ),
-                                              )
-                                            : SingleChildScrollView(
-                                                child: SelectableText(
-                                                  _log.join('\n'),
-                                                  style: const TextStyle(
-                                                    fontFamily: 'Consolas',
-                                                    fontSize: 11.5,
-                                                    height: 1.55,
-                                                    color: Color(0xFFCBD5E1),
-                                                  ),
-                                                ),
+                                      if (_loginMessage.isNotEmpty) ...[
+                                        const SizedBox(height: 8),
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxHeight: 64,
+                                          ),
+                                          child: SingleChildScrollView(
+                                            child: SelectableText(
+                                              _loginMessage,
+                                              style: TextStyle(
+                                                color: _loginOk == true
+                                                    ? c.live
+                                                    : const Color(0xFFFCA5A5),
+                                                fontSize: 12,
+                                                height: 1.4,
                                               ),
-                                      ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(height: 10),
+                                _fillPane(
+                                  child: GlassCard(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text(
+                                              'DIAGNOSTICS',
+                                              style: TextStyle(
+                                                color: c.textMuted,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 1.6,
+                                              ),
+                                            ),
+                                            const Spacer(),
+                                            InkWell(
+                                              onTap: () =>
+                                                  setState(() => _log.clear()),
+                                              child: Text(
+                                                'clear',
+                                                style: TextStyle(
+                                                  color: c.textMuted,
+                                                  fontSize: 11.5,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Expanded(
+                                          child: _log.isEmpty
+                                              ? Text(
+                                                  'No events yet — log in to begin.',
+                                                  style: TextStyle(
+                                                    color: c.textMuted,
+                                                    fontSize: 12,
+                                                  ),
+                                                )
+                                              : SingleChildScrollView(
+                                                  child: SelectableText(
+                                                    _log.join('\n'),
+                                                    style: const TextStyle(
+                                                      fontFamily: 'Consolas',
+                                                      fontSize: 11.5,
+                                                      height: 1.55,
+                                                      color: Color(0xFFCBD5E1),
+                                                    ),
+                                                  ),
+                                                ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                        ])
+                      : _tab == 1
+                      ? SmsTab(
+                          client: _client,
+                          connected: _connected,
+                          log: _logLine,
+                        )
+                      : _tab == 2
+                      ? UssdTab(
+                          client: _client,
+                          connected: _connected,
+                          log: _logLine,
+                        )
+                      : _tab == 3
+                      ? InfoTab(
+                          client: _client,
+                          connected: _connected,
+                          log: _logLine,
+                        )
+                      : DeviceTab(
+                          client: _client,
+                          connected: _connected,
+                          log: _logLine,
                         ),
-                      ])
-                    : _tab == 1
-                    ? SmsTab(
-                        client: _client,
-                        connected: _connected,
-                        log: _logLine,
-                      )
-                    : _tab == 2
-                    ? UssdTab(
-                        client: _client,
-                        connected: _connected,
-                        log: _logLine,
-                      )
-                    : _tab == 3
-                    ? InfoTab(
-                        client: _client,
-                        connected: _connected,
-                        log: _logLine,
-                      )
-                    : DeviceTab(
-                        client: _client,
-                        connected: _connected,
-                        log: _logLine,
-                      ),
-              ),
-              const SizedBox(height: 8),
-              NavigationBar(
-                height: 56,
-                backgroundColor: Colors.transparent,
-                indicatorColor: c.accent.withAlpha(40),
-                selectedIndex: _tab,
-                onDestinationSelected: (i) => setState(() => _tab = i),
-                labelTextStyle: WidgetStatePropertyAll(
-                  TextStyle(color: c.textSecondary, fontSize: 11),
                 ),
-                destinations: [
-                  NavigationDestination(
-                    icon: Icon(Icons.dashboard_outlined, color: c.textMuted),
-                    selectedIcon: Icon(Icons.dashboard, color: c.accentText),
-                    label: 'Status',
+                if (_narrow) const SizedBox(height: 8),
+                if (_narrow)
+                  NavigationBar(
+                    height: 56,
+                    backgroundColor: Colors.transparent,
+                    indicatorColor: c.accent.withAlpha(40),
+                    selectedIndex: _tab,
+                    onDestinationSelected: (i) => setState(() => _tab = i),
+                    labelTextStyle: WidgetStatePropertyAll(
+                      TextStyle(color: c.textSecondary, fontSize: 11),
+                    ),
+                    destinations: [
+                      NavigationDestination(
+                        icon: Icon(
+                          Icons.dashboard_outlined,
+                          color: c.textMuted,
+                        ),
+                        selectedIcon: Icon(
+                          Icons.dashboard,
+                          color: c.accentText,
+                        ),
+                        label: 'Status',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.sms_outlined, color: c.textMuted),
+                        selectedIcon: Icon(Icons.sms, color: c.accentText),
+                        label: 'SMS',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.dialpad_outlined, color: c.textMuted),
+                        selectedIcon: Icon(Icons.dialpad, color: c.accentText),
+                        label: 'USSD',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.info_outline, color: c.textMuted),
+                        selectedIcon: Icon(Icons.info, color: c.accentText),
+                        label: 'Info',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.settings_outlined, color: c.textMuted),
+                        selectedIcon: Icon(Icons.settings, color: c.accentText),
+                        label: 'Device',
+                      ),
+                    ],
                   ),
-                  NavigationDestination(
-                    icon: Icon(Icons.sms_outlined, color: c.textMuted),
-                    selectedIcon: Icon(Icons.sms, color: c.accentText),
-                    label: 'SMS',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.dialpad_outlined, color: c.textMuted),
-                    selectedIcon: Icon(Icons.dialpad, color: c.accentText),
-                    label: 'USSD',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.info_outline, color: c.textMuted),
-                    selectedIcon: Icon(Icons.info, color: c.accentText),
-                    label: 'Info',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.settings_outlined, color: c.textMuted),
-                    selectedIcon: Icon(Icons.settings, color: c.accentText),
-                    label: 'Device',
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

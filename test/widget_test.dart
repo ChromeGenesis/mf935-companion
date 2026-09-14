@@ -115,12 +115,20 @@ void main() {
         '28-09-2026 02:09:12,\nYouTube Night:*n Next';
     final bundles = ZteClient.parseDataBundles(reply);
     expect(bundles.length, 2);
+    // Display order is parse order here (sorting happens in resolve).
     expect(bundles[0].name, 'Binge Bundle');
     expect(bundles[0].mb, 0);
+    expect(bundles[0].exhausted, isTrue);
     expect(bundles[0].expiry, DateTime(2026, 9, 15, 5, 9, 18));
     expect(bundles[1].name, 'Weekly Bundle');
     expect(bundles[1].mb, closeTo(29990.35, 0.01));
     expect(bundles[1].expiry, DateTime(2026, 9, 28, 2, 9, 12));
+    // Resolved snapshot: live first, exhausted last, countdown skips
+    // the exhausted bundle even though it expires sooner.
+    final snap0 = ZteClient.resolveDataBalance(reply, DateTime.now());
+    expect(snap0.bundles[0].name, 'Weekly Bundle');
+    expect(snap0.bundles[1].name, 'Binge Bundle');
+    expect(snap0.nextExpiry?.name, 'Weekly Bundle');
     // GB/KB units convert; menu prompts without amounts are skipped.
     final units = ZteClient.parseDataBundles('A: 1.5GB till 01-01-2030 00:00:00, B: 512KB');
     expect(units[0].mb, 1536);

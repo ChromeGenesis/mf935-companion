@@ -21,6 +21,10 @@ class StatusTab extends StatefulWidget {
   final Future<void> Function(String title, String body) notify;
   final Future<void> Function() onRefreshNow;
 
+  /// Published snapshot feed: main's global countdown strip listens to
+  /// this, so the countdown lives app-wide, not in the hero card.
+  final ValueNotifier<DataBalance?> balanceFeed;
+
   const StatusTab({
     super.key,
     required this.client,
@@ -29,6 +33,7 @@ class StatusTab extends StatefulWidget {
     required this.log,
     required this.notify,
     required this.onRefreshNow,
+    required this.balanceFeed,
   });
 
   @override
@@ -86,6 +91,7 @@ class _StatusTabState extends State<StatusTab> {
       );
       if (!mounted) return;
       setState(() => _balance = cached);
+      widget.balanceFeed.value = cached;
     } catch (_) {
       // Corrupt cache — a fresh dial fixes it.
     }
@@ -102,6 +108,7 @@ class _StatusTabState extends State<StatusTab> {
       await prefs.setString(_balanceKey, jsonEncode(b.toJson()));
       if (!mounted) return;
       setState(() => _balance = b);
+      widget.balanceFeed.value = b;
       widget.log(
         'balance: ${ZteClient.formatDataVolume(b.totalMb)} across ${b.bundles.length} bundles',
       );
@@ -117,6 +124,8 @@ class _StatusTabState extends State<StatusTab> {
   Future<void> _checkExpiries(DataBalance b) async {
     final now = DateTime.now();
     for (final bundle in b.bundles) {
+      // Exhausted bundles never alert — nothing left to warn about.
+      if (bundle.exhausted) continue;
       final exp = bundle.expiry;
       if (exp == null) continue;
       final key = '${bundle.name}|${exp.toIso8601String()}';
@@ -247,52 +256,42 @@ class _StatusTabState extends State<StatusTab> {
                 : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
-          // Live countdown to the next expiry — the global "when does
-          // my data die" answer, ticking every second.
-          if (b.nextExpiry?.expiry != null &&
-              b.nextExpiry!.expiry!.isAfter(DateTime.now())) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Icon(Icons.hourglass_bottom, size: 14, color: c.accentText),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    '${b.nextExpiry!.name} ends in ',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-                  ),
-                ),
-                CountdownText(target: b.nextExpiry!.expiry!),
-              ],
-            ),
-          ],
-          const SizedBox(height: 6),
+          // Live countdown moved global (main's strip under the header).
+          // Hero keeps total + bundles + raw only.
           for (final bundle in b.bundles)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      bundle.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+            Opacity(
+              // Exhausted bundles take less precedence: dimmed, last.
+              opacity: bundle.exhausted ? 0.45 : 1,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        bundle.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: c.textSecondary,
+                          fontSize: 12.5,
+                          decoration: bundle.exhausted
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
+                      ),
                     ),
-                  ),
-                  Text(
-                    ZteClient.formatDataVolume(bundle.mb),
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
+                    Text(
+                      ZteClient.formatDataVolume(bundle.mb),
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  _expiryChip(c, bundle),
-                ],
+                    const SizedBox(width: 8),
+                    _expiryChip(c, bundle),
+                  ],
+                ),
               ),
             ),
           // Raw reply: ground truth one tap away, no matter how
@@ -320,9 +319,28 @@ class _StatusTabState extends State<StatusTab> {
     );
   }
 
-  /// Expiry chip: red when expired, amber under 3 days, muted otherwise.
-  /// Null expiry (unknown) shows a neutral "?" instead of guessing.
+  /// Expiry chip: "exhausted" (grey, precedence over everything) for
+  /// empty bundles, red when expired, amber under 3 days, muted
+  /// otherwise, "expiry?" when unknown instead of guessing.
   Widget _expiryChip(ZteColors c, DataBundle bundle) {
+    if (bundle.exhausted) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.textMuted.withAlpha(20),
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(color: c.textMuted.withAlpha(50)),
+        ),
+        child: Text(
+          'exhausted',
+          style: TextStyle(
+            color: c.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
     final exp = bundle.expiry;
     if (exp == null) {
       return Container(
@@ -485,68 +503,70 @@ class _StatusTabState extends State<StatusTab> {
           ),
         ),
         const SizedBox(height: 10),
-        GridView.count(
-          // Three across on desktop (uses the width), two when narrow.
-          crossAxisCount: MediaQuery.sizeOf(context).width < 640 ? 2 : 3,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 2.6,
-          children: [
-            StatTile(
-              icon: Icons.data_usage,
-              value: widget.connected
-                  ? ZteClient.formatDataVolume(usedMb)
-                  : '—',
-              caption: 'month usage',
-            ),
-            StatTile(
-              icon: Icons.speed_outlined,
-              value: !widget.connected
-                  ? '—'
-                  : liveDown == null
-                  ? 'n/a'
-                  : ZteClient.formatRate(liveDown),
-              caption: 'live down',
-            ),
-            StatTile(
-              icon: Icons.upload_outlined,
-              value: !widget.connected
-                  ? '—'
-                  : liveUp == null
-                  ? 'n/a'
-                  : ZteClient.formatRate(liveUp),
-              caption: 'live up',
-            ),
-            StatTile(
-              icon: Icons.markunread_mailbox_outlined,
-              value: _tileText(s['sms_unread_num']),
-              caption: 'SMS unread',
-              valueColor:
-                  _tileText(s['sms_unread_num']) != '—' &&
-                      _tileText(s['sms_unread_num']) != '0' &&
-                      _tileText(s['sms_unread_num']) != 'n/a'
-                  ? c.accentText
-                  : null,
-            ),
-            StatTile(
-              icon: Icons.schedule_outlined,
-              value: !widget.connected
-                  ? '—'
-                  : '${s['monthly_time'] ?? ''}'.isEmpty
-                  ? 'n/a'
-                  : ZteClient.formatOnlineTime(s['monthly_time']),
-              caption: 'online',
-            ),
-            StatTile(
-              icon: Icons.devices_outlined,
-              value: _deviceCount == null
-                  ? (widget.connected ? '…' : '—')
-                  : '$_deviceCount',
-              caption: 'devices',
-            ),
-          ],
+        LayoutBuilder(
+          builder: (ctx, cons) => GridView.count(
+            // Three across when the pane earns it, two when narrow.
+            crossAxisCount: cons.maxWidth > 430 ? 3 : 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 2.6,
+            children: [
+              StatTile(
+                icon: Icons.data_usage,
+                value: widget.connected
+                    ? ZteClient.formatDataVolume(usedMb)
+                    : '—',
+                caption: 'month usage',
+              ),
+              StatTile(
+                icon: Icons.speed_outlined,
+                value: !widget.connected
+                    ? '—'
+                    : liveDown == null
+                    ? 'n/a'
+                    : ZteClient.formatRate(liveDown),
+                caption: 'live down',
+              ),
+              StatTile(
+                icon: Icons.upload_outlined,
+                value: !widget.connected
+                    ? '—'
+                    : liveUp == null
+                    ? 'n/a'
+                    : ZteClient.formatRate(liveUp),
+                caption: 'live up',
+              ),
+              StatTile(
+                icon: Icons.markunread_mailbox_outlined,
+                value: _tileText(s['sms_unread_num']),
+                caption: 'SMS unread',
+                valueColor:
+                    _tileText(s['sms_unread_num']) != '—' &&
+                        _tileText(s['sms_unread_num']) != '0' &&
+                        _tileText(s['sms_unread_num']) != 'n/a'
+                    ? c.accentText
+                    : null,
+              ),
+              StatTile(
+                icon: Icons.schedule_outlined,
+                value: !widget.connected
+                    ? '—'
+                    : '${s['monthly_time'] ?? ''}'.isEmpty
+                    ? 'n/a'
+                    : ZteClient.formatOnlineTime(s['monthly_time']),
+                caption: 'online',
+              ),
+              StatTile(
+                icon: Icons.devices_outlined,
+                value: _deviceCount == null
+                    ? (widget.connected ? '…' : '—')
+                    : '$_deviceCount',
+                caption: 'devices',
+              ),
+            ],
+          ),
         ),
       ],
     );

@@ -53,6 +53,7 @@ class SmsMessage {
   });
 
   bool get isNew => tag == '1';
+
   /// "26,09,13,14,44,04,+4" -> "26/09/13 14:44:04".
   String get displayDate {
     final parts = date.split(',');
@@ -65,7 +66,8 @@ class SmsMessage {
 /// Group messages by sender, first-seen order preserved. Single grouping
 /// path for inbox + tests (SSOT).
 List<MapEntry<String, List<SmsMessage>>> groupSmsBySender(
-    List<SmsMessage> msgs) {
+  List<SmsMessage> msgs,
+) {
   final groups = <String, List<SmsMessage>>{};
   for (final m in msgs) {
     groups.putIfAbsent(m.number, () => []).add(m);
@@ -79,8 +81,11 @@ class AttachedDevice {
   final String hostname;
   final String ip;
 
-  const AttachedDevice(
-      {required this.mac, required this.hostname, required this.ip});
+  const AttachedDevice({
+    required this.mac,
+    required this.hostname,
+    required this.ip,
+  });
 }
 
 /// One carrier data bundle. [expiry] is best-effort: when the reply
@@ -94,23 +99,24 @@ class DataBundle {
 
   const DataBundle({required this.name, required this.mb, this.expiry});
 
+  /// Out of quota: unexpired but empty. Shown dimmed + last, never
+  /// drives the countdown or alerts.
+  bool get exhausted => mb <= 0;
+
   /// Days until expiry (negative = expired). Null when unknown.
-  int? get daysLeft =>
-      expiry == null ? null : expiry!.difference(DateTime.now()).inDays;
+  int? get daysLeft => expiry?.difference(DateTime.now()).inDays;
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'mb': mb,
-        'expiry': expiry?.toIso8601String(),
-      };
+    'name': name,
+    'mb': mb,
+    'expiry': expiry?.toIso8601String(),
+  };
 
   factory DataBundle.fromJson(Map<String, dynamic> j) => DataBundle(
-        name: '${j['name'] ?? ''}',
-        mb: (j['mb'] as num?)?.toDouble() ?? 0,
-        expiry: j['expiry'] == null
-            ? null
-            : DateTime.tryParse('${j['expiry']}'),
-      );
+    name: '${j['name'] ?? ''}',
+    mb: (j['mb'] as num?)?.toDouble() ?? 0,
+    expiry: j['expiry'] == null ? null : DateTime.tryParse('${j['expiry']}'),
+  );
 }
 
 /// Persisted data-balance snapshot: survives SMS deletion, app restarts,
@@ -120,39 +126,45 @@ class DataBalance {
   final String raw;
   final DateTime fetchedAt;
 
-  const DataBalance(
-      {required this.bundles, required this.raw, required this.fetchedAt});
+  const DataBalance({
+    required this.bundles,
+    required this.raw,
+    required this.fetchedAt,
+  });
 
   double get totalMb => bundles.fold(0, (a, b) => a + b.mb);
 
-  /// Soonest-dated bundle still in the future (the one that matters).
+  /// Soonest-dated LIVE bundle still in the future (the one that
+  /// matters). Exhausted bundles never qualify, even unexpired.
   DataBundle? get nextExpiry {
-    final dated = bundles.where((b) => b.expiry != null).toList()
+    final live = bundles.where((b) => !b.exhausted && b.expiry != null).toList()
       ..sort((a, b) => a.expiry!.compareTo(b.expiry!));
-    if (dated.isEmpty) return null;
+    if (live.isEmpty) return null;
     final now = DateTime.now();
-    return dated.firstWhere((b) => b.expiry!.isAfter(now),
-        orElse: () => dated.last);
+    return live.firstWhere(
+      (b) => b.expiry!.isAfter(now),
+      orElse: () => live.last,
+    );
   }
 
   Map<String, dynamic> toJson() => {
-        'bundles': bundles.map((b) => b.toJson()).toList(),
-        'raw': raw,
-        'fetchedAt': fetchedAt.toIso8601String(),
-      };
+    'bundles': bundles.map((b) => b.toJson()).toList(),
+    'raw': raw,
+    'fetchedAt': fetchedAt.toIso8601String(),
+  };
 
   factory DataBalance.fromJson(Map<String, dynamic> j) {
     final raw = j['bundles'];
     return DataBalance(
       bundles: raw is List
           ? raw
-              .whereType<Map>()
-              .map((e) =>
-                  DataBundle.fromJson(Map<String, dynamic>.from(e)))
-              .toList()
+                .whereType<Map>()
+                .map((e) => DataBundle.fromJson(Map<String, dynamic>.from(e)))
+                .toList()
           : [],
       raw: '${j['raw'] ?? ''}',
-      fetchedAt: DateTime.tryParse('${j['fetchedAt']}') ??
+      fetchedAt:
+          DateTime.tryParse('${j['fetchedAt']}') ??
           DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
@@ -166,34 +178,38 @@ class DataBalance {
 ///
 /// Browser + app share one login session: opening both can kick each other out.
 class ZteClient {
-  ZteClient({String gatewayIp = '192.168.0.1', PersistCookieJar? cookieJar})
-      : _gatewayIp = gatewayIp {
-    _dio = Dio(BaseOptions(
-      baseUrl: 'http://$_gatewayIp',
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 8),
-      contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
-      // ZTE returns JSON as text/plain sometimes; accept everything.
-      responseType: ResponseType.plain,
-      headers: {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'X-Requested-With': 'XMLHttpRequest',
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-      },
-    ));
+  ZteClient({this._gatewayIp = '192.168.0.1', PersistCookieJar? cookieJar}) {
+    _dio = Dio(
+      BaseOptions(
+        baseUrl: 'http://$_gatewayIp',
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+        contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+        // ZTE returns JSON as text/plain sometimes; accept everything.
+        responseType: ResponseType.plain,
+        headers: {
+          'Accept': 'application/json, text/javascript, */*; q=0.01',
+          'X-Requested-With': 'XMLHttpRequest',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        },
+      ),
+    );
     _cookieJar = cookieJar ?? PersistCookieJar();
     _dio.interceptors.add(CookieManager(_cookieJar));
     // The stock web UI always sends these; some firmwares reject the
     // goform POST without a same-origin Referer.
-    _dio.interceptors.add(InterceptorsWrapper(
-      onRequest: (options, handler) {
-        options.headers['Referer'] = 'http://${_dio.options.baseUrl.replaceFirst('http://', '')}/index.html';
-        options.headers['Origin'] = _dio.options.baseUrl;
-        handler.next(options);
-      },
-    ));
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          options.headers['Referer'] =
+              'http://${_dio.options.baseUrl.replaceFirst('http://', '')}/index.html';
+          options.headers['Origin'] = _dio.options.baseUrl;
+          handler.next(options);
+        },
+      ),
+    );
   }
 
   late final Dio _dio;
@@ -228,7 +244,7 @@ class ZteClient {
               body.containsKey('cr_version'))) {
         return (
           true,
-          'MiFi API responding at $_gatewayIp (goform OK). Now log in below.'
+          'MiFi API responding at $_gatewayIp (goform OK). Now log in below.',
         );
       }
     } on DioException catch (e) {
@@ -254,18 +270,18 @@ class ZteClient {
           body.contains('UFI')) {
         return (
           true,
-          'Router page reachable at $_gatewayIp (HTTP ${res.statusCode}). Now log in below.'
+          'Router page reachable at $_gatewayIp (HTTP ${res.statusCode}). Now log in below.',
         );
       }
-      final title = RegExp(r'<title[^>]*>(.*?)</title>',
-              caseSensitive: false, dotAll: true)
-          .firstMatch(body)
-          ?.group(1)
-          ?.trim();
+      final title = RegExp(
+        r'<title[^>]*>(.*?)</title>',
+        caseSensitive: false,
+        dotAll: true,
+      ).firstMatch(body)?.group(1)?.trim();
       return (
         false,
         'That is NOT the MiFi: ${title != null && title.isNotEmpty ? 'page title is "$title"' : 'no ZTE markers in reply'} '
-            '(HTTP ${res.statusCode}). Join the MF935 WiFi, or fix the gateway IP.'
+            '(HTTP ${res.statusCode}). Join the MF935 WiFi, or fix the gateway IP.',
       );
     } on DioException catch (e) {
       return (false, _describeDioError(e));
@@ -327,11 +343,7 @@ class ZteClient {
         '/goform/goform_set_cmd_process',
         // Field order mirrors the stock web UI byte-for-byte:
         // isTest=false&goformId=LOGIN&password=<UPPERCASE_HEX>
-        data: {
-          'isTest': 'false',
-          'goformId': 'LOGIN',
-          'password': credential,
-        },
+        data: {'isTest': 'false', 'goformId': 'LOGIN', 'password': credential},
       );
       final raw = '${res.data}'.trim();
       final body = _decode(res.data);
@@ -345,19 +357,21 @@ class ZteClient {
             return LoginResult(true, 'Login accepted by router.', raw);
           case '1':
             return LoginResult(
-                false, 'Malformed login request (result=1).', raw);
-          case '3':
-            return LoginResult(
-                false, 'Wrong password (result=3).', raw);
-          case '2':
-            return LoginResult(
               false,
-              'Router refused login (result=2).',
+              'Malformed login request (result=1).',
               raw,
             );
+          case '3':
+            return LoginResult(false, 'Wrong password (result=3).', raw);
+          case '2':
+            return LoginResult(false, 'Router refused login (result=2).', raw);
           default:
             if (result.isNotEmpty) {
-              return LoginResult(false, 'Router rejected login (result=$result).', raw);
+              return LoginResult(
+                false,
+                'Router rejected login (result=$result).',
+                raw,
+              );
             }
         }
       }
@@ -366,7 +380,11 @@ class ZteClient {
       if (res.statusCode == 200) {
         final probe = await getStatus(cmds: const ['battery_vol_percent']);
         if (probe.containsKey('battery_vol_percent')) {
-          return LoginResult(true, 'Login accepted (verified with status poll).', raw);
+          return LoginResult(
+            true,
+            'Login accepted (verified with status poll).',
+            raw,
+          );
         }
         return LoginResult(
           false,
@@ -376,7 +394,11 @@ class ZteClient {
       }
       return LoginResult(false, 'Unexpected HTTP ${res.statusCode}.', raw);
     } on DioException catch (e) {
-      return LoginResult(false, _describeDioError(e), e.response?.data?.toString() ?? '');
+      return LoginResult(
+        false,
+        _describeDioError(e),
+        e.response?.data?.toString() ?? '',
+      );
     } catch (e) {
       return LoginResult(false, 'Login error: $e', '');
     }
@@ -482,10 +504,14 @@ class ZteClient {
   /// Prefer [runUssd], which follows the full write_flag state machine.
   Future<String> getUssdResult() async {
     final status = await getStatus(
-        cmds: const ['ussd_data_info'], multiData: false);
-    return decodeUcs2Hex(status['ussd_data']?.toString() ??
-        status['ussd_data_info']?.toString() ??
-        '');
+      cmds: const ['ussd_data_info'],
+      multiData: false,
+    );
+    return decodeUcs2Hex(
+      status['ussd_data']?.toString() ??
+          status['ussd_data_info']?.toString() ??
+          '',
+    );
   }
 
   /// Full USSD transaction: send [code], then follow ussd_write_flag until
@@ -502,7 +528,9 @@ class ZteClient {
     } catch (e) {
       return UssdResult(false, '', '', '', 'Send failed: $e');
     }
-    if (!sent) return const UssdResult(false, '', '', '', 'Modem refused the request.');
+    if (!sent) {
+      return const UssdResult(false, '', '', '', 'Modem refused the request.');
+    }
     return waitUssdReply(pollEvery: pollEvery, maxPolls: maxPolls);
   }
 
@@ -516,7 +544,9 @@ class ZteClient {
       String flag;
       try {
         final m = await getStatus(
-            cmds: const ['ussd_write_flag'], multiData: false);
+          cmds: const ['ussd_write_flag'],
+          multiData: false,
+        );
         flag = '${m['ussd_write_flag'] ?? ''}';
       } catch (e) {
         return UssdResult(false, '', '', '', 'Poll failed: $e');
@@ -525,10 +555,11 @@ class ZteClient {
       if (flag == '16') {
         try {
           final m = await getStatus(
-              cmds: const ['ussd_data_info'], multiData: false);
+            cmds: const ['ussd_data_info'],
+            multiData: false,
+          );
           final text = decodeUcs2Hex('${m['ussd_data'] ?? ''}');
-          return UssdResult(
-              true, text, '${m['ussd_action'] ?? ''}', flag, '');
+          return UssdResult(true, text, '${m['ussd_action'] ?? ''}', flag, '');
         } catch (e) {
           return UssdResult(false, '', '', flag, 'Reply fetch failed: $e');
         }
@@ -565,8 +596,10 @@ class ZteClient {
   /// the JS SHA256 stringifier uses the upper lookup table (`r=1`).
   /// Proven with a live `{"result":"0"}` on this exact device.
   static String generateAuthHash(String password, String ld) {
-    final first =
-        sha256.convert(utf8.encode(password)).toString().toUpperCase();
+    final first = sha256
+        .convert(utf8.encode(password))
+        .toString()
+        .toUpperCase();
     return sha256.convert(utf8.encode(first + ld)).toString().toUpperCase();
   }
 
@@ -586,6 +619,7 @@ class ZteClient {
     }
     return provider;
   }
+
   /// Normalize a USSD code: strip spaces, ensure it starts with '*'
   /// and ends with '#'. Every network USSD code has that shape.
   static String normalizeUssd(String raw) {
@@ -600,37 +634,40 @@ class ZteClient {
       RegExp(r'^\*[0-9*]+#$').hasMatch(code.trim());
 
   /// Priority layers (never blank — quota is guaranteed):
-  /// 1. Structured bundles: "Name: 2.5GB till/expires <date>".
-  /// 2. No structure? Sum every "<amount> UNIT" in the reply as "Data
+  /// 1. Structured bundles: `Name: 2.5GB till/expires <date>`.
+  /// 2. No structure? Sum every `<amount> UNIT` in the reply as "Data
   ///    left" (balance texts list remaining quotas, not usage).
   /// 3. No amounts at all? Empty bundles — the card then shows the raw
   ///    reply so the user still sees the answer.
   /// Expiry attaches per-bundle when named, else the first date found
   /// anywhere in the reply (best-effort, always verifiable in raw).
   static DataBalance resolveDataBalance(String raw, DateTime fetchedAt) {
-    final structured = parseDataBundles(raw);
+    final structured = _sortBundles(parseDataBundles(raw));
     if (structured.isNotEmpty) {
-      final looseDate =
-          structured.any((b) => b.expiry != null) ? null : scanModemDate(raw);
+      final looseDate = structured.any((b) => b.expiry != null)
+          ? null
+          : scanModemDate(raw);
       final bundles = looseDate == null
           ? structured
           : structured
-              .map((b) => b.expiry != null
-                  ? b
-                  : DataBundle(name: b.name, mb: b.mb, expiry: looseDate))
-              .toList();
+                .map(
+                  (b) => b.expiry != null
+                      ? b
+                      : DataBundle(name: b.name, mb: b.mb, expiry: looseDate),
+                )
+                .toList();
       return DataBalance(bundles: bundles, raw: raw, fetchedAt: fetchedAt);
     }
     final amounts = extractDataAmounts(raw);
     if (amounts.isNotEmpty) {
       return DataBalance(
-        bundles: [
+        bundles: _sortBundles([
           DataBundle(
             name: 'Data left',
             mb: amounts.fold(0.0, (a, b) => a + b),
             expiry: scanModemDate(raw),
           ),
-        ],
+        ]),
         raw: raw,
         fetchedAt: fetchedAt,
       );
@@ -638,10 +675,29 @@ class ZteClient {
     return DataBalance(bundles: const [], raw: raw, fetchedAt: fetchedAt);
   }
 
-  /// Every "<amount> KB|MB|GB" in free text, converted to MB.
+  /// Display order: live bundles by soonest expiry first, dateless live
+  /// next, exhausted last. Deterministic everywhere (SSOT).
+  static List<DataBundle> _sortBundles(List<DataBundle> bundles) {
+    int rank(DataBundle b) {
+      if (b.exhausted) return 2;
+      if (b.expiry == null) return 1;
+      return 0;
+    }
+
+    bundles.sort((a, b) {
+      final r = rank(a).compareTo(rank(b));
+      if (r != 0) return r;
+      if (a.expiry != null && b.expiry != null) {
+        return a.expiry!.compareTo(b.expiry!);
+      }
+      return b.mb.compareTo(a.mb);
+    });
+    return bundles;
+  }
+
+  /// Every `<amount> KB|MB|GB` in free text, converted to MB.
   static List<double> extractDataAmounts(String text) {
-    final re =
-        RegExp(r'([\d.]+)\s*(KB|MB|GB)\b', caseSensitive: false);
+    final re = RegExp(r'([\d.]+)\s*(KB|MB|GB)\b', caseSensitive: false);
     return re.allMatches(text).map((m) {
       final amount = double.tryParse(m.group(1) ?? '') ?? 0;
       switch ((m.group(2) ?? 'MB').toUpperCase()) {
@@ -657,8 +713,7 @@ class ZteClient {
 
   /// First modem date ("dd-MM-yyyy [HH:mm:ss]" or slashes) in free text.
   static DateTime? scanModemDate(String text) {
-    final re = RegExp(
-        r'(\d{2}[-/]\d{2}[-/]\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)');
+    final re = RegExp(r'(\d{2}[-/]\d{2}[-/]\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)');
     final m = re.firstMatch(text);
     return m == null ? null : _parseModemDate(m.group(1));
   }
@@ -683,13 +738,15 @@ class ZteClient {
       final mb = unit == 'GB'
           ? amount * 1024
           : unit == 'KB'
-              ? amount / 1024
-              : amount;
-      out.add(DataBundle(
-        name: (m.group(1) ?? '').trim(),
-        mb: mb,
-        expiry: _parseModemDate(m.group(4)),
-      ));
+          ? amount / 1024
+          : amount;
+      out.add(
+        DataBundle(
+          name: (m.group(1) ?? '').trim(),
+          mb: mb,
+          expiry: _parseModemDate(m.group(4)),
+        ),
+      );
     }
     return out;
   }
@@ -698,9 +755,9 @@ class ZteClient {
   /// when no time given). Null when unparseable.
   static DateTime? _parseModemDate(String? s) {
     if (s == null) return null;
-    final m =
-        RegExp(r'(\d{2})[-/](\d{2})[-/](\d{4})(?:\s+(\d{2}):(\d{2}):(\d{2}))?')
-            .firstMatch(s.trim());
+    final m = RegExp(
+      r'(\d{2})[-/](\d{2})[-/](\d{4})(?:\s+(\d{2}):(\d{2}):(\d{2}))?',
+    ).firstMatch(s.trim());
     if (m == null) return null;
     return DateTime(
       int.parse(m.group(3)!),
@@ -817,24 +874,144 @@ class ZteClient {
   }
 
   static const _gsm7 = {
-    '000A', '000C', '000D', '0020', '0021', '0022', '0023', '0024',
-    '0025', '0026', '0027', '0028', '0029', '002A', '002B', '002C',
-    '002D', '002E', '002F', '0030', '0031', '0032', '0033', '0034',
-    '0035', '0036', '0037', '0038', '0039', '003A', '003B', '003C',
-    '003D', '003E', '003F', '0040', '0041', '0042', '0043', '0044',
-    '0045', '0046', '0047', '0048', '0049', '004A', '004B', '004C',
-    '004D', '004E', '004F', '0050', '0051', '0052', '0053', '0054',
-    '0055', '0056', '0057', '0058', '0059', '005A', '005B', '005C',
-    '005D', '005E', '005F', '0061', '0062', '0063', '0064', '0065',
-    '0066', '0067', '0068', '0069', '006A', '006B', '006C', '006D',
-    '006E', '006F', '0070', '0071', '0072', '0073', '0074', '0075',
-    '0076', '0077', '0078', '0079', '007A', '007B', '007C', '007D',
-    '007E', '00A0', '00A1', '00A3', '00A4', '00A5', '00A7', '00BF',
-    '00C4', '00C5', '00C6', '00C7', '00C9', '00D1', '00D6', '00D8',
-    '00DC', '00DF', '00E0', '00E4', '00E5', '00E6', '00E8', '00E9',
-    '00EC', '00F1', '00F2', '00F6', '00F8', '00F9', '00FC', '0393',
-    '0394', '0398', '039B', '039E', '03A0', '03A3', '03A6', '03A8',
-    '03A9', '20AC',
+    '000A',
+    '000C',
+    '000D',
+    '0020',
+    '0021',
+    '0022',
+    '0023',
+    '0024',
+    '0025',
+    '0026',
+    '0027',
+    '0028',
+    '0029',
+    '002A',
+    '002B',
+    '002C',
+    '002D',
+    '002E',
+    '002F',
+    '0030',
+    '0031',
+    '0032',
+    '0033',
+    '0034',
+    '0035',
+    '0036',
+    '0037',
+    '0038',
+    '0039',
+    '003A',
+    '003B',
+    '003C',
+    '003D',
+    '003E',
+    '003F',
+    '0040',
+    '0041',
+    '0042',
+    '0043',
+    '0044',
+    '0045',
+    '0046',
+    '0047',
+    '0048',
+    '0049',
+    '004A',
+    '004B',
+    '004C',
+    '004D',
+    '004E',
+    '004F',
+    '0050',
+    '0051',
+    '0052',
+    '0053',
+    '0054',
+    '0055',
+    '0056',
+    '0057',
+    '0058',
+    '0059',
+    '005A',
+    '005B',
+    '005C',
+    '005D',
+    '005E',
+    '005F',
+    '0061',
+    '0062',
+    '0063',
+    '0064',
+    '0065',
+    '0066',
+    '0067',
+    '0068',
+    '0069',
+    '006A',
+    '006B',
+    '006C',
+    '006D',
+    '006E',
+    '006F',
+    '0070',
+    '0071',
+    '0072',
+    '0073',
+    '0074',
+    '0075',
+    '0076',
+    '0077',
+    '0078',
+    '0079',
+    '007A',
+    '007B',
+    '007C',
+    '007D',
+    '007E',
+    '00A0',
+    '00A1',
+    '00A3',
+    '00A4',
+    '00A5',
+    '00A7',
+    '00BF',
+    '00C4',
+    '00C5',
+    '00C6',
+    '00C7',
+    '00C9',
+    '00D1',
+    '00D6',
+    '00D8',
+    '00DC',
+    '00DF',
+    '00E0',
+    '00E4',
+    '00E5',
+    '00E6',
+    '00E8',
+    '00E9',
+    '00EC',
+    '00F1',
+    '00F2',
+    '00F6',
+    '00F8',
+    '00F9',
+    '00FC',
+    '0393',
+    '0394',
+    '0398',
+    '039B',
+    '039E',
+    '03A0',
+    '03A3',
+    '03A6',
+    '03A8',
+    '03A9',
+    '20AC',
   };
 
   /// 'GSM7_default' when every char is in the GSM7 table, else 'UNICODE'.
@@ -857,21 +1034,24 @@ class ZteClient {
     // Mirror JS getTimezoneOffset(): minutes to ADD to local to get UTC.
     final jsOffset = -t.timeZoneOffset.inMinutes;
     final tzHours = -jsOffset / 60;
-    final tzBody = tzHours % 1 == 0
-        ? tzHours.toStringAsFixed(0)
-        : '$tzHours';
+    final tzBody = tzHours % 1 == 0 ? tzHours.toStringAsFixed(0) : '$tzHours';
     final tz = '${jsOffset < 0 ? '+' : ''}$tzBody';
     return '${'${t.year}'.substring(2)};${two(t.month)};${two(t.day)};'
         '${two(t.hour)};${two(t.minute)};${two(t.second)};$tz';
   }
+
   /// Parse a data-balance reply like "2.3GB remaining" / "450MB left".
   /// Returns MB, or null when no match. Adjust the regex per carrier.
   static double? parseDataBalanceMb(String ussdText) {
-    final gb = RegExp(r'(\d+(?:\.\d+)?)\s*GB', caseSensitive: false)
-        .firstMatch(ussdText);
+    final gb = RegExp(
+      r'(\d+(?:\.\d+)?)\s*GB',
+      caseSensitive: false,
+    ).firstMatch(ussdText);
     if (gb != null) return double.parse(gb.group(1)!) * 1024;
-    final mb = RegExp(r'(\d+(?:\.\d+)?)\s*MB', caseSensitive: false)
-        .firstMatch(ussdText);
+    final mb = RegExp(
+      r'(\d+(?:\.\d+)?)\s*MB',
+      caseSensitive: false,
+    ).firstMatch(ussdText);
     if (mb != null) return double.parse(mb.group(1)!);
     return null;
   }
@@ -935,10 +1115,8 @@ class ZteClient {
   }
 
   /// Storage counters: sms_nv_total, sms_sim_total, *_rev_total etc.
-  Future<Map<String, dynamic>> getSmsCapacity() => getStatus(
-        cmds: const ['sms_capacity_info'],
-        multiData: false,
-      );
+  Future<Map<String, dynamic>> getSmsCapacity() =>
+      getStatus(cmds: const ['sms_capacity_info'], multiData: false);
 
   /// Delete messages by id (DELETE_SMS, ids joined "1;2;").
   Future<bool> deleteSms(List<String> ids) async {
@@ -972,7 +1150,9 @@ class ZteClient {
   /// SMS settings: centerNumber, memStore, deliveryReport, validity label.
   Future<Map<String, String>> getSmsSettings() async {
     final m = await getStatus(
-        cmds: const ['sms_parameter_info'], multiData: false);
+      cmds: const ['sms_parameter_info'],
+      multiData: false,
+    );
     const validityLabels = {
       '143': 'twelve_hours',
       '167': 'one_day',
@@ -1012,46 +1192,50 @@ class ZteClient {
   // ── Information / statistics ──────────────────────────────────────
 
   /// Device information screen (29-key stock request).
-  Future<Map<String, dynamic>> getDeviceInfo() => getStatus(cmds: const [
-        'wifi_coverage',
-        'm_ssid_enable',
-        'imei',
-        'web_version',
-        'hardware_version',
-        'MAX_Access_num',
-        'wa_inner_version',
-        'SSID1',
-        'm_SSID',
-        'm_HideSSID',
-        'm_MAX_Access_num',
-        'lan_ipaddr',
-        'mac_address',
-        'ussd_msisdn',
-        'LocalDomain',
-        'wan_ipaddr',
-        'ipv6_wan_ipaddr',
-        'pdp_type',
-        'opms_wan_mode',
-        'ppp_status',
-        'sim_imsi',
-        'rssi',
-        'rscp',
-        'lte_rsrp',
-        'network_type',
-      ]);
+  Future<Map<String, dynamic>> getDeviceInfo() => getStatus(
+    cmds: const [
+      'wifi_coverage',
+      'm_ssid_enable',
+      'imei',
+      'web_version',
+      'hardware_version',
+      'MAX_Access_num',
+      'wa_inner_version',
+      'SSID1',
+      'm_SSID',
+      'm_HideSSID',
+      'm_MAX_Access_num',
+      'lan_ipaddr',
+      'mac_address',
+      'ussd_msisdn',
+      'LocalDomain',
+      'wan_ipaddr',
+      'ipv6_wan_ipaddr',
+      'pdp_type',
+      'opms_wan_mode',
+      'ppp_status',
+      'sim_imsi',
+      'rssi',
+      'rscp',
+      'lte_rsrp',
+      'network_type',
+    ],
+  );
 
   /// Realtime + monthly traffic counters.
-  Future<Map<String, dynamic>> getTrafficStats() => getStatus(cmds: const [
-        'realtime_tx_bytes',
-        'realtime_rx_bytes',
-        'realtime_time',
-        'realtime_tx_thrpt',
-        'realtime_rx_thrpt',
-        'monthly_rx_bytes',
-        'monthly_tx_bytes',
-        'monthly_time',
-        'date_month',
-      ]);
+  Future<Map<String, dynamic>> getTrafficStats() => getStatus(
+    cmds: const [
+      'realtime_tx_bytes',
+      'realtime_rx_bytes',
+      'realtime_time',
+      'realtime_tx_thrpt',
+      'realtime_rx_thrpt',
+      'monthly_rx_bytes',
+      'monthly_tx_bytes',
+      'monthly_time',
+      'date_month',
+    ],
+  );
 
   /// Reset the data counter (RESET_DATA_COUNTER, option=curr_total_month).
   Future<bool> resetDataCounter() async {
@@ -1067,12 +1251,14 @@ class ZteClient {
   }
 
   /// Data limit settings (raw keys: switch/unit/size/alert_percent).
-  Future<Map<String, dynamic>> getDataLimit() => getStatus(cmds: const [
-        'data_volume_limit_switch',
-        'data_volume_limit_unit',
-        'data_volume_limit_size',
-        'data_volume_alert_percent',
-      ]);
+  Future<Map<String, dynamic>> getDataLimit() => getStatus(
+    cmds: const [
+      'data_volume_limit_switch',
+      'data_volume_limit_unit',
+      'data_volume_limit_size',
+      'data_volume_alert_percent',
+    ],
+  );
 
   /// Set the data limit. When [enabled] is false only the switch is sent.
   Future<bool> setDataLimit({
@@ -1097,8 +1283,7 @@ class ZteClient {
 
   /// Attached Wi-Fi stations (station_list, no multi_data — verified live).
   Future<List<AttachedDevice>> getConnectedDevices() async {
-    final m = await getStatus(
-        cmds: const ['station_list'], multiData: false);
+    final m = await getStatus(cmds: const ['station_list'], multiData: false);
     final raw = m['station_list'];
     if (raw is! List) return [];
     return raw.whereType<Map>().map((e) {

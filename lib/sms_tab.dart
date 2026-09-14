@@ -683,7 +683,7 @@ class _SmsTabState extends State<SmsTab> {
                       children: [
                         Switch(
                           value: _report,
-                          activeColor: c.accent,
+                          activeThumbColor: c.accent,
                           onChanged: (v) => setState(() => _report = v),
                         ),
                         Text(

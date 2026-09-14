@@ -14,14 +14,13 @@ import 'zte_client.dart';
 /// condition clears, so the tray never spams.
 class ZtePoller {
   ZtePoller({
-    required ZteClient client,
-    required FlutterLocalNotificationsPlugin notifications,
+    required this._client,
+    required this._notifications,
     this.interval = const Duration(seconds: 30),
     this.lowBatteryPercent = 20,
     this.lowDataMb,
     this.onStatus,
-  })  : _client = client,
-        _notifications = notifications;
+  });
 
   final ZteClient _client;
   final FlutterLocalNotificationsPlugin _notifications;

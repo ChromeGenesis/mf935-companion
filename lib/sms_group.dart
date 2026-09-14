@@ -83,7 +83,7 @@ class SenderGroup extends StatelessWidget {
                     value: allPicked ? true : (picked > 0 ? null : false),
                     tristate: true,
                     visualDensity: VisualDensity.compact,
-                    activeColor: c.accent,
+                    fillColor: WidgetStatePropertyAll(c.accent),
                     onChanged: (_) => onToggleGroupPick(),
                   ),
                 ),
@@ -178,7 +178,8 @@ class SenderGroup extends StatelessWidget {
                           child: Checkbox(
                             value: pickedRow,
                             visualDensity: VisualDensity.compact,
-                            activeColor: c.accent,
+                            fillColor:
+                                WidgetStatePropertyAll(c.accent),
                             onChanged: (_) => onToggleSelect(m.id),
                           ),
                         ),
