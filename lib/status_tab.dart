@@ -53,7 +53,6 @@ class _StatusTabState extends State<StatusTab> {
   bool _balanceBusy = false;
   Timer? _balanceTimer;
   final Set<String> _expiryNotified = {};
-  int? _deviceCount;
 
   // Data cap (firmware-side limit): lives here next to the month-usage
   // tile it constrains, not in Info.
@@ -186,8 +185,53 @@ class _StatusTabState extends State<StatusTab> {
     return v.isEmpty ? 'n/a' : v;
   }
 
+  /// Unread-SMS chip on the hero card: icon + honest counter. Glows
+  /// amber when there are unread; taps to the inbox when the shell
+  /// provides tab jumps.
+  Widget _unreadBadge(ZteColors c) {
+    final txt = _tileText(widget.status['sms_unread_num']);
+    final unread = int.tryParse('${widget.status['sms_unread_num'] ?? ''}');
+    final alive = widget.connected && (unread ?? 0) > 0;
+    return Tooltip(
+      message: 'Unread SMS — open inbox',
+      child: GestureDetector(
+        onTap: widget.onJumpTab == null ? null : () => widget.onJumpTab!(1),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: alive ? c.accent.withAlpha(26) : Colors.transparent,
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(
+              color: alive ? c.accent.withAlpha(130) : c.borderSubtle,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.markunread_mailbox_outlined,
+                size: 15,
+                color: alive ? c.accentText : c.textMuted,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                txt,
+                style: TextStyle(
+                  color: alive ? c.accentText : c.textMuted,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Attached-station list (separate endpoint, best-effort). Feeds the
-  /// device-info card AND the devices count tile with one fetch.
+  /// device-info card with one fetch.
   Future<void> _refreshDevices() async {
     if (!widget.connected || _devicesBusy) return;
     setState(() => _devicesBusy = true);
@@ -196,11 +240,10 @@ class _StatusTabState extends State<StatusTab> {
       if (!mounted) return;
       setState(() {
         _devices = devs;
-        _deviceCount = devs.length;
         _devicesAt = DateTime.now();
       });
     } catch (_) {
-      // Leave the last known list; count tile shows — when never fetched.
+      // Leave the last known list.
     } finally {
       if (mounted) setState(() => _devicesBusy = false);
     }
@@ -928,6 +971,8 @@ class _StatusTabState extends State<StatusTab> {
                       ],
                     ),
                   ),
+                  _unreadBadge(c),
+                  const SizedBox(width: 2),
                   IconButton(
                     tooltip: 'Refresh now',
                     onPressed: !widget.connected
@@ -959,24 +1004,20 @@ class _StatusTabState extends State<StatusTab> {
           ),
         ),
         const SizedBox(height: 10),
-        LayoutBuilder(
-          builder: (ctx, cons) => GridView.count(
-            // Three across when the pane earns it, two when narrow.
-            crossAxisCount: cons.maxWidth > 430 ? 3 : 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 2.6,
-            children: [
-              StatTile(
+        Row(
+          children: [
+            Expanded(
+              child: StatTile(
                 icon: Icons.data_usage,
                 value: widget.connected
                     ? ZteClient.formatDataVolume(usedMb)
                     : '—',
                 caption: 'month usage',
               ),
-              StatTile(
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: StatTile(
                 icon: Icons.speed_outlined,
                 value: !widget.connected
                     ? '—'
@@ -985,7 +1026,10 @@ class _StatusTabState extends State<StatusTab> {
                     : ZteClient.formatRate(liveDown),
                 caption: 'live down',
               ),
-              StatTile(
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: StatTile(
                 icon: Icons.upload_outlined,
                 value: !widget.connected
                     ? '—'
@@ -994,38 +1038,8 @@ class _StatusTabState extends State<StatusTab> {
                     : ZteClient.formatRate(liveUp),
                 caption: 'live up',
               ),
-              StatTile(
-                icon: Icons.markunread_mailbox_outlined,
-                value: _tileText(s['sms_unread_num']),
-                caption: 'SMS unread',
-                valueColor:
-                    _tileText(s['sms_unread_num']) != '—' &&
-                        _tileText(s['sms_unread_num']) != '0' &&
-                        _tileText(s['sms_unread_num']) != 'n/a'
-                    ? c.accentText
-                    : null,
-                onTap: widget.onJumpTab == null
-                    ? null
-                    : () => widget.onJumpTab!(1),
-              ),
-              StatTile(
-                icon: Icons.schedule_outlined,
-                value: !widget.connected
-                    ? '—'
-                    : '${s['monthly_time'] ?? ''}'.isEmpty
-                    ? 'n/a'
-                    : ZteClient.formatOnlineTime(s['monthly_time']),
-                caption: 'online',
-              ),
-              StatTile(
-                icon: Icons.devices_outlined,
-                value: _deviceCount == null
-                    ? (widget.connected ? '…' : '—')
-                    : '$_deviceCount',
-                caption: 'devices',
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         _limitCard(c),
