@@ -84,13 +84,10 @@ class _DashboardPageState extends State<DashboardPage>
 
   final _ipCtrl = TextEditingController(text: '192.168.0.1');
   final _passCtrl = TextEditingController();
-  final _ussdCtrl = TextEditingController(text: '*312#');
-
   Map<String, dynamic> _status = {};
   final List<String> _log = [];
   String _loginMessage = '';
   bool? _loginOk;
-  String _ussdResult = '';
   bool _busy = false;
   int _tab = 0;
   bool _narrow = false; // <640px: stack panes, dialer-first USSD
@@ -137,7 +134,6 @@ class _DashboardPageState extends State<DashboardPage>
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
-    _ussdCtrl.dispose();
     super.dispose();
   }
 
@@ -300,38 +296,6 @@ class _DashboardPageState extends State<DashboardPage>
       },
     )..start();
     _logLine('poller started (30s) — minimize to tray to keep polling');
-  }
-
-  Future<void> _checkUssdBalance() async {
-    if (!mounted) return;
-    setState(() => _busy = true);
-    try {
-      final code = ZteClient.normalizeUssd(_ussdCtrl.text);
-      if (!ZteClient.isValidUssd(code)) {
-        _logLine('Not a USSD code (want *digits#): "${_ussdCtrl.text.trim()}"');
-        return;
-      }
-      _ussdCtrl.text = code;
-      try {
-        await _client.cancelUssd();
-      } catch (_) {
-        // No stale session — harmless, carry on.
-      }
-      _logLine('USSD $code sending…');
-      final r = await _client.runUssd(code);
-      if (!mounted) return;
-      setState(() => _ussdResult = r.success ? r.text : 'Failed: ${r.error}');
-      final mb = r.success ? ZteClient.parseDataBalanceMb(r.text) : null;
-      _logLine(
-        r.success
-            ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply — see USSD tab' : ''})${mb != null ? ' (~${mb.toStringAsFixed(0)} MB)' : ''}'
-            : 'USSD failed: ${r.error}',
-      );
-    } catch (e) {
-      _logLine('USSD error: $e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
 
   /// Status panes: side-by-side on desktop, stacked + scrollable on
@@ -555,55 +519,6 @@ class _DashboardPageState extends State<DashboardPage>
                                                   : const Color(0xFFFCA5A5),
                                               fontSize: 12,
                                               height: 1.4,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              GlassCard(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const SectionLabel('Data balance · USSD'),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: TextField(
-                                            controller: _ussdCtrl,
-                                            decoration: const InputDecoration(
-                                              labelText: 'USSD code',
-                                              hintText: '*312#',
-                                              isDense: true,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        ElevatedButton(
-                                          onPressed: (!_connected || _busy)
-                                              ? null
-                                              : _checkUssdBalance,
-                                          child: const Text('Check'),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_ussdResult.isNotEmpty) ...[
-                                      const SizedBox(height: 8),
-                                      ConstrainedBox(
-                                        constraints: const BoxConstraints(
-                                          maxHeight: 44,
-                                        ),
-                                        child: SingleChildScrollView(
-                                          child: SelectableText(
-                                            'Reply: $_ussdResult',
-                                            style: TextStyle(
-                                              color: c.textPrimary,
-                                              fontSize: 12.5,
                                             ),
                                           ),
                                         ),

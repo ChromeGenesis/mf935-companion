@@ -163,16 +163,19 @@ class _StatusTabState extends State<StatusTab> {
     }
   }
 
-  /// Balance section inside the hero: divider, total, bundles, raw.
-  Widget _balanceSection(ZteColors c) {
+  /// Balance section: divider, total, bundles, raw. [divider]=false
+  /// when embedded side-by-side (the gap already separates).
+  Widget _balanceSection(ZteColors c, {bool divider = true}) {
     final b = _balance;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const SizedBox(height: 10),
-        Divider(color: c.borderSubtle, height: 1),
-        const SizedBox(height: 10),
+        if (divider) ...[
+          const SizedBox(height: 10),
+          Divider(color: c.borderSubtle, height: 1),
+          const SizedBox(height: 10),
+        ],
         Row(
           children: [
             Text(
@@ -369,11 +372,13 @@ class _StatusTabState extends State<StatusTab> {
         GlassCard(
           highlighted: widget.connected,
           padding: const EdgeInsets.all(14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          child: LayoutBuilder(
+            builder: (ctx, cons) {
+              // Wide hero: status and balance share the card horizontally
+              // instead of stacking top-down. Narrow: stacked as before.
+              // (Left pane is ~510px at the 980px minimum window.)
+              final wide = cons.maxWidth > 480;
+              final statusHead = Row(
                 children: [
                   BatteryRing(percent: battery, charging: charging, size: 92),
                   const SizedBox(width: 16),
@@ -429,16 +434,32 @@ class _StatusTabState extends State<StatusTab> {
                     icon: Icon(Icons.refresh, color: c.accentText, size: 20),
                   ),
                 ],
-              ),
-              // Carrier balance lives INSIDE the hero — one glowy card,
-              // not two.
-              _balanceSection(c),
-            ],
+              );
+              if (wide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 11, child: statusHead),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      flex: 10,
+                      child: _balanceSection(c, divider: false),
+                    ),
+                  ],
+                );
+              }
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [statusHead, _balanceSection(c)],
+              );
+            },
           ),
         ),
         const SizedBox(height: 10),
         GridView.count(
-          crossAxisCount: 2,
+          // Three across on desktop (uses the width), two when narrow.
+          crossAxisCount: MediaQuery.sizeOf(context).width < 640 ? 2 : 3,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 10,
