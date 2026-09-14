@@ -200,6 +200,7 @@ class DevicesCard extends StatelessWidget {
     );
   }
 }
+
 class MetaRow extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -342,4 +343,3 @@ class DeviceActionsCard extends StatelessWidget {
     );
   }
 }
-
