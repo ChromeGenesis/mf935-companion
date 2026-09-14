@@ -71,8 +71,7 @@ class _StatusTabState extends State<StatusTab> {
 
   void _onConnect() {
     _balanceTimer?.cancel();
-    _balanceTimer =
-        Timer.periodic(_balanceEvery, (_) => _refreshBalance());
+    _balanceTimer = Timer.periodic(_balanceEvery, (_) => _refreshBalance());
     _refreshDeviceCount();
     _refreshBalance();
   }
@@ -83,7 +82,8 @@ class _StatusTabState extends State<StatusTab> {
       final raw = prefs.getString(_balanceKey);
       if (raw == null) return;
       final cached = DataBalance.fromJson(
-          Map<String, dynamic>.from(jsonDecode(raw) as Map));
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
       if (!mounted) return;
       setState(() => _balance = cached);
     } catch (_) {
@@ -103,7 +103,8 @@ class _StatusTabState extends State<StatusTab> {
       if (!mounted) return;
       setState(() => _balance = b);
       widget.log(
-          'balance: ${ZteClient.formatDataVolume(b.totalMb)} across ${b.bundles.length} bundles');
+        'balance: ${ZteClient.formatDataVolume(b.totalMb)} across ${b.bundles.length} bundles',
+      );
       _checkExpiries(b);
     } catch (e) {
       widget.log('balance check failed: $e');
@@ -123,20 +124,33 @@ class _StatusTabState extends State<StatusTab> {
       final left = exp.difference(now);
       if (left.isNegative && left.inDays > -2) {
         _expiryNotified.add(key);
-        await widget.notify('MF935: ${bundle.name} expired',
-            'It ran out on ${_fmtDate(exp)}.');
+        await widget.notify(
+          'MF935: ${bundle.name} expired',
+          'It ran out on ${_fmtDate(exp)}.',
+        );
       } else if (!left.isNegative && left.inHours <= 48) {
         _expiryNotified.add(key);
-        final when =
-            left.inDays >= 1 ? 'in ${left.inDays}d' : 'in ${left.inHours}h';
-        await widget.notify('MF935: ${bundle.name} expires $when',
-            '${ZteClient.formatDataVolume(bundle.mb)} left till ${_fmtDate(exp)}.');
+        final when = left.inDays >= 1
+            ? 'in ${left.inDays}d'
+            : 'in ${left.inHours}h';
+        await widget.notify(
+          'MF935: ${bundle.name} expires $when',
+          '${ZteClient.formatDataVolume(bundle.mb)} left till ${_fmtDate(exp)}.',
+        );
       }
     }
   }
 
   String _fmtDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
+
+  /// Tile honesty, no default shit: '—' when logged out, 'n/a' when the
+  /// modem gave nothing, the value otherwise.
+  String _tileText(dynamic raw) {
+    if (!widget.connected) return '—';
+    final v = '${raw ?? ''}';
+    return v.isEmpty ? 'n/a' : v;
+  }
 
   /// Attached-station count (separate endpoint, best-effort).
   Future<void> _refreshDeviceCount() async {
@@ -147,6 +161,139 @@ class _StatusTabState extends State<StatusTab> {
     } catch (_) {
       // Leave the last known count; tile shows — when never fetched.
     }
+  }
+
+  /// Balance section inside the hero: divider, total, bundles, raw.
+  Widget _balanceSection(ZteColors c) {
+    final b = _balance;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 10),
+        Divider(color: c.borderSubtle, height: 1),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Text(
+              'DATA BALANCE',
+              style: TextStyle(
+                color: c.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.6,
+              ),
+            ),
+            const Spacer(),
+            if (b != null)
+              Text(
+                ZteClient.timeAgo(b.fetchedAt),
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 30,
+              height: 30,
+              child: _balanceBusy
+                  ? const Padding(
+                      padding: EdgeInsets.all(7),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : IconButton(
+                      tooltip: 'Re-check (*323*1#)',
+                      padding: EdgeInsets.zero,
+                      onPressed: (!widget.connected || _balanceBusy)
+                          ? null
+                          : _refreshBalance,
+                      icon: Icon(Icons.refresh, color: c.accentText, size: 18),
+                    ),
+            ),
+          ],
+        ),
+        if (b == null && !_balanceBusy)
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.connected
+                      ? 'Dial *323*1# for the real balance.'
+                      : 'Log in, then check the real balance.',
+                  style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: (!widget.connected || _balanceBusy)
+                    ? null
+                    : _refreshBalance,
+                child: const Text('Check'),
+              ),
+            ],
+          )
+        else if (b != null) ...[
+          Text(
+            ZteClient.formatDataVolume(b.totalMb),
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 23,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          Text(
+            b.bundles.isEmpty
+                ? 'could not parse — raw reply below'
+                : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
+            style: TextStyle(color: c.textMuted, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          for (final bundle in b.bundles)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      bundle.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                    ),
+                  ),
+                  Text(
+                    ZteClient.formatDataVolume(bundle.mb),
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _expiryChip(c, bundle),
+                ],
+              ),
+            ),
+          // Raw reply: ground truth one tap away, no matter how
+          // the carrier rewords things next month.
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(
+              'Raw reply',
+              style: TextStyle(color: c.textMuted, fontSize: 12),
+            ),
+            children: [
+              SelectableText(
+                b.raw,
+                style: TextStyle(
+                  color: c.textSecondary,
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 
   /// Expiry chip: red when expired, amber under 3 days, muted otherwise.
@@ -161,11 +308,14 @@ class _StatusTabState extends State<StatusTab> {
           borderRadius: BorderRadius.circular(99),
           border: Border.all(color: c.textMuted.withAlpha(60)),
         ),
-        child: Text('expiry?',
-            style: TextStyle(
-                color: c.textMuted,
-                fontSize: 11,
-                fontWeight: FontWeight.w700)),
+        child: Text(
+          'expiry?',
+          style: TextStyle(
+            color: c.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       );
     }
     final days = exp.difference(DateTime.now()).inDays;
@@ -188,9 +338,14 @@ class _StatusTabState extends State<StatusTab> {
         borderRadius: BorderRadius.circular(99),
         border: Border.all(color: color.withAlpha(90)),
       ),
-      child: Text(label,
-          style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.w700)),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 
@@ -201,198 +356,83 @@ class _StatusTabState extends State<StatusTab> {
     final battery = int.tryParse('${s['battery_vol_percent'] ?? ''}');
     final charging = '${s['battery_charging'] ?? ''}' == '1';
     final signal = int.tryParse('${s['signalbar'] ?? ''}');
-    final provider =
-        ZteClient.carrierName('${s['network_provider'] ?? '—'}');
+    final provider = ZteClient.carrierName('${s['network_provider'] ?? '—'}');
     final providerRaw = '${s['network_provider'] ?? ''}';
     final netType = '${s['network_type'] ?? ''}';
-    final unread = '${s['sms_unread_num'] ?? '—'}';
     final rx = double.tryParse('${s['monthly_rx_bytes'] ?? '0'}') ?? 0;
     final tx = double.tryParse('${s['monthly_tx_bytes'] ?? '0'}') ?? 0;
     final usedMb = (rx + tx) / (1024 * 1024);
     final liveDown = double.tryParse('${s['realtime_rx_thrpt'] ?? ''}');
-    final b = _balance;
 
     return Column(
       children: [
         GlassCard(
           highlighted: widget.connected,
           padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              BatteryRing(
-                percent: battery,
-                charging: charging,
-                size: 92,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      provider == '—' ? 'No device data yet' : provider,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: c.textPrimary,
-                        fontSize: 19,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      netType.isEmpty || netType == '—'
-                          ? 'Log in to start polling'
-                          : '$netType · ${providerRaw.isNotEmpty ? '$providerRaw · ' : ''}${widget.client.gatewayIp}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: c.textSecondary, fontSize: 12.5),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        SignalBars(level: signal ?? -1, height: 22),
-                        const SizedBox(width: 8),
-                        Text(
-                          signal == null
-                              ? 'signal —'
-                              : 'signal $signal/5',
-                          style: TextStyle(
-                              color: c.textSecondary, fontSize: 12.5),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: 'Refresh now',
-                onPressed: !widget.connected ? null : () => widget.onRefreshNow(),
-                icon: Icon(Icons.refresh, color: c.accentText, size: 20),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        // ── Carrier data balance (persisted snapshot, raw always attached)
-        GlassCard(
-          highlighted: widget.connected && b != null,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  const SectionLabel('Data balance'),
-                  const Spacer(),
-                  if (b != null)
-                    Text(ZteClient.timeAgo(b.fetchedAt),
-                        style: TextStyle(
-                            color: c.textMuted, fontSize: 11.5)),
-                  const SizedBox(width: 6),
-                  SizedBox(
-                    width: 30,
-                    height: 30,
-                    child: _balanceBusy
-                        ? const Padding(
-                            padding: EdgeInsets.all(7),
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2),
-                          )
-                        : IconButton(
-                            tooltip: 'Re-check (*323*1#)',
-                            padding: EdgeInsets.zero,
-                            onPressed: (!widget.connected ||
-                                    _balanceBusy)
-                                ? null
-                                : _refreshBalance,
-                            icon: Icon(Icons.refresh,
-                                color: c.accentText, size: 18),
-                          ),
-                  ),
-                ],
-              ),
-              if (b == null && !_balanceBusy)
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                          'Dial *323*1# for the real balance.',
-                          style: TextStyle(
-                              color: c.textSecondary,
-                              fontSize: 12.5)),
-                    ),
-                    ElevatedButton(
-                      onPressed: (!widget.connected || _balanceBusy)
-                          ? null
-                          : _refreshBalance,
-                      child: const Text('Check'),
-                    ),
-                  ],
-                )
-              else if (b != null) ...[
-                Text(
-                  ZteClient.formatDataVolume(b.totalMb),
-                  style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 23,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                Text(
-                    b.bundles.isEmpty
-                        ? 'could not parse — raw reply below'
-                        : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
-                    style:
-                        TextStyle(color: c.textMuted, fontSize: 12)),
-                const SizedBox(height: 6),
-                for (final bundle in b.bundles)
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
+                  BatteryRing(percent: battery, charging: charging, size: 92),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: Text(bundle.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  color: c.textSecondary,
-                                  fontSize: 12.5)),
-                        ),
                         Text(
-                          ZteClient.formatDataVolume(bundle.mb),
+                          provider == '—' ? 'No device data yet' : provider,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              color: c.textPrimary,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700),
+                            color: c.textPrimary,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                        const SizedBox(width: 8),
-                        _expiryChip(c, bundle),
+                        const SizedBox(height: 2),
+                        Text(
+                          netType.isEmpty || netType == '—'
+                              ? 'Log in to start polling'
+                              : '$netType · ${providerRaw.isNotEmpty ? '$providerRaw · ' : ''}${widget.client.gatewayIp}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            SignalBars(level: signal ?? -1, height: 22),
+                            const SizedBox(width: 8),
+                            Text(
+                              signal == null ? 'signal —' : 'signal $signal/5',
+                              style: TextStyle(
+                                color: c.textSecondary,
+                                fontSize: 12.5,
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
-                // Raw reply: ground truth one tap away, no matter how
-                // the carrier rewords things next month.
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  dense: true,
-                  title: Text('Raw reply',
-                      style: TextStyle(
-                          color: c.textMuted, fontSize: 12)),
-                  children: [
-                    SelectableText(b.raw,
-                        style: TextStyle(
-                            color: c.textSecondary,
-                            fontSize: 12,
-                            height: 1.5)),
-                  ],
-                ),
-              ],
+                  IconButton(
+                    tooltip: 'Refresh now',
+                    onPressed: !widget.connected
+                        ? null
+                        : () => widget.onRefreshNow(),
+                    icon: Icon(Icons.refresh, color: c.accentText, size: 20),
+                  ),
+                ],
+              ),
+              // Carrier balance lives INSIDE the hero — one glowy card,
+              // not two.
+              _balanceSection(c),
             ],
           ),
         ),
@@ -414,40 +454,38 @@ class _StatusTabState extends State<StatusTab> {
             ),
             StatTile(
               icon: Icons.speed_outlined,
-              value: widget.connected && liveDown != null
-                  ? ZteClient.formatRate(liveDown)
-                  : '—',
+              value: !widget.connected
+                  ? '—'
+                  : liveDown == null
+                  ? 'n/a'
+                  : ZteClient.formatRate(liveDown),
               caption: 'live down',
             ),
             StatTile(
               icon: Icons.markunread_mailbox_outlined,
-              value: unread,
+              value: _tileText(s['sms_unread_num']),
               caption: 'SMS unread',
-              valueColor: unread != '—' && unread != '0'
+              valueColor:
+                  _tileText(s['sms_unread_num']) != '—' &&
+                      _tileText(s['sms_unread_num']) != '0' &&
+                      _tileText(s['sms_unread_num']) != 'n/a'
                   ? c.accentText
                   : null,
             ),
             StatTile(
               icon: Icons.schedule_outlined,
-              value: widget.connected
-                  ? ZteClient.formatOnlineTime(s['monthly_time'])
-                  : '—',
+              value: !widget.connected
+                  ? '—'
+                  : '${s['monthly_time'] ?? ''}'.isEmpty
+                  ? 'n/a'
+                  : ZteClient.formatOnlineTime(s['monthly_time']),
               caption: 'online',
             ),
             StatTile(
-              icon: Icons.bolt_outlined,
-              value: charging
-                  ? 'Charging'
-                  : battery == null
-                      ? '—'
-                      : '$battery%',
-              caption: 'power',
-              valueColor: charging ? c.live : null,
-            ),
-            StatTile(
               icon: Icons.devices_outlined,
-              value:
-                  _deviceCount == null ? '—' : '$_deviceCount',
+              value: _deviceCount == null
+                  ? (widget.connected ? '…' : '—')
+                  : '$_deviceCount',
               caption: 'devices',
             ),
           ],

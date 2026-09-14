@@ -44,10 +44,14 @@ Future<void> main() async {
   } catch (_) {
     // No tray icon asset yet — tooltip + menu still work.
   }
-  await trayManager.setContextMenu(Menu(items: [
-    MenuItem(key: 'show', label: 'Show'),
-    MenuItem(key: 'quit', label: 'Quit'),
-  ]));
+  await trayManager.setContextMenu(
+    Menu(
+      items: [
+        MenuItem(key: 'show', label: 'Show'),
+        MenuItem(key: 'quit', label: 'Quit'),
+      ],
+    ),
+  );
 
   runApp(const ZteApp());
 }
@@ -155,8 +159,9 @@ class _DashboardPageState extends State<DashboardPage>
   /// once with the remembered password (defaults to 'admin').
   Future<void> _startupAuth() async {
     try {
-      final probe =
-          await _client.getStatus(cmds: const ['battery_vol_percent']);
+      final probe = await _client.getStatus(
+        cmds: const ['battery_vol_percent'],
+      );
       if (!mounted) return;
       if ('${probe['battery_vol_percent'] ?? ''}'.isNotEmpty) {
         setState(() {
@@ -204,9 +209,11 @@ class _DashboardPageState extends State<DashboardPage>
             ? result.message
             : '${result.message}${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
       });
-      _logLine(result.success
-          ? 'LOGIN ok @ ${_client.gatewayIp}'
-          : 'LOGIN FAILED: ${result.message}');
+      _logLine(
+        result.success
+            ? 'LOGIN ok @ ${_client.gatewayIp}'
+            : 'LOGIN FAILED: ${result.message}',
+      );
       if (result.raw.isNotEmpty && !result.success) {
         _logLine('raw reply: ${result.raw}');
       }
@@ -222,7 +229,8 @@ class _DashboardPageState extends State<DashboardPage>
             : '';
         if (!mounted) return;
         setState(() {
-          _loginMessage = '${_loginMessage.split('\n').first}$counterInfo'
+          _loginMessage =
+              '${_loginMessage.split('\n').first}$counterInfo'
               '${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
         });
         _logLine('counters: failsLeft=$failsLeft lockSecs=$lockSecs');
@@ -312,12 +320,13 @@ class _DashboardPageState extends State<DashboardPage>
       _logLine('USSD $code sending…');
       final r = await _client.runUssd(code);
       if (!mounted) return;
-      setState(() => _ussdResult =
-          r.success ? r.text : 'Failed: ${r.error}');
+      setState(() => _ussdResult = r.success ? r.text : 'Failed: ${r.error}');
       final mb = r.success ? ZteClient.parseDataBalanceMb(r.text) : null;
-      _logLine(r.success
-          ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply — see USSD tab' : ''})${mb != null ? ' (~${mb.toStringAsFixed(0)} MB)' : ''}'
-          : 'USSD failed: ${r.error}');
+      _logLine(
+        r.success
+            ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply — see USSD tab' : ''})${mb != null ? ' (~${mb.toStringAsFixed(0)} MB)' : ''}'
+            : 'USSD failed: ${r.error}',
+      );
     } catch (e) {
       _logLine('USSD error: $e');
     } finally {
@@ -336,8 +345,7 @@ class _DashboardPageState extends State<DashboardPage>
     }
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 4),
-      child:
-          Column(children: [panes[0], const SizedBox(height: 12), panes[1]]),
+      child: Column(children: [panes[0], const SizedBox(height: 12), panes[1]]),
     );
   }
 
@@ -387,8 +395,7 @@ class _DashboardPageState extends State<DashboardPage>
 
     final pill = !_connected
         ? StatusPill(label: 'Disconnected', color: c.danger)
-        : StatusPill(
-            label: 'Connected · ${_client.gatewayIp}', color: c.live);
+        : StatusPill(label: 'Connected · ${_client.gatewayIp}', color: c.live);
 
     _narrow = MediaQuery.sizeOf(context).width < 640;
 
@@ -409,8 +416,11 @@ class _DashboardPageState extends State<DashboardPage>
                       borderRadius: BorderRadius.circular(11),
                       border: Border.all(color: c.accent.withAlpha(110)),
                     ),
-                    child:
-                        Icon(Icons.wifi_tethering, color: c.accentText, size: 20),
+                    child: Icon(
+                      Icons.wifi_tethering,
+                      color: c.accentText,
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -429,8 +439,7 @@ class _DashboardPageState extends State<DashboardPage>
                         Text(
                           'ZTE MiFi dashboard · battery · signal · data',
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              TextStyle(color: c.textMuted, fontSize: 11.5),
+                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
                         ),
                       ],
                     ),
@@ -444,239 +453,251 @@ class _DashboardPageState extends State<DashboardPage>
               Expanded(
                 child: _tab == 0
                     ? _statusFlex([
-                    // ── Left: status (owns its balance lifecycle) ──
-                    _pane(
-                      flex: 11,
-                      child: StatusTab(
-                        client: _client,
-                        connected: _connected,
-                        status: _status,
-                        log: _logLine,
-                        notify: _notifyNow,
-                        onRefreshNow: _refreshNow,
-                      ),
-                    ),
-                    // ── Right: actions ──
-                    _pane(
-                      flex: 9,
-                      child: Column(
-                        children: [
-                          GlassCard(
-                            padding: const EdgeInsets.all(14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SectionLabel('Connection'),
-                                TextField(
-                                  controller: _ipCtrl,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Gateway IP',
-                                    hintText: '192.168.0.1',
-                                    isDense: true,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: _passCtrl,
-                                  obscureText: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Admin password',
-                                    hintText: 'Sticker on the MiFi',
-                                    isDense: true,
-                                  ),
-                                  onSubmitted: (_) =>
-                                      _busy ? null : _doLogin(),
-                                ),
-                                const SizedBox(height: 10),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        onPressed: (_busy ||
-                                                _cooldownLeft > 0)
-                                            ? null
-                                            : _doLogin,
-                                        icon: const Icon(Icons.login,
-                                            size: 15),
-                                        label: Text(
-                                            _cooldownLeft > 0
-                                                ? 'Wait ${_cooldownLeft}s'
-                                                : _connected
-                                                    ? 'Re-login'
-                                                    : 'Login & poll',
-                                            maxLines: 1,
-                                            overflow:
-                                                TextOverflow.ellipsis),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: _busy
-                                            ? null
-                                            : _testConnection,
-                                        icon: const Icon(Icons.radar,
-                                            size: 15),
-                                        label: const Text('Test',
-                                            maxLines: 1,
-                                            overflow:
-                                                TextOverflow.ellipsis),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                if (_loginMessage.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                        maxHeight: 64),
-                                    child: SingleChildScrollView(
-                                      child: SelectableText(
-                                        _loginMessage,
-                                        style: TextStyle(
-                                          color: _loginOk == true
-                                              ? c.live
-                                              : const Color(0xFFFCA5A5),
-                                          fontSize: 12,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
+                        // ── Left: status (owns its balance lifecycle) ──
+                        _pane(
+                          flex: 11,
+                          child: StatusTab(
+                            client: _client,
+                            connected: _connected,
+                            status: _status,
+                            log: _logLine,
+                            notify: _notifyNow,
+                            onRefreshNow: _refreshNow,
                           ),
-                          const SizedBox(height: 10),
-                          GlassCard(
-                            padding: const EdgeInsets.all(14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SectionLabel('Data balance · USSD'),
-                                Row(
+                        ),
+                        // ── Right: actions ──
+                        _pane(
+                          flex: 9,
+                          child: Column(
+                            children: [
+                              GlassCard(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _ussdCtrl,
-                                        decoration: const InputDecoration(
-                                          labelText: 'USSD code',
-                                          hintText: '*312#',
-                                          isDense: true,
+                                    const SectionLabel('Connection'),
+                                    TextField(
+                                      controller: _ipCtrl,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Gateway IP',
+                                        hintText: '192.168.0.1',
+                                        isDense: true,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: _passCtrl,
+                                      obscureText: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Admin password',
+                                        hintText: 'Sticker on the MiFi',
+                                        isDense: true,
+                                      ),
+                                      onSubmitted: (_) =>
+                                          _busy ? null : _doLogin(),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: ElevatedButton.icon(
+                                            onPressed:
+                                                (_busy || _cooldownLeft > 0)
+                                                ? null
+                                                : _doLogin,
+                                            icon: const Icon(
+                                              Icons.login,
+                                              size: 15,
+                                            ),
+                                            label: Text(
+                                              _cooldownLeft > 0
+                                                  ? 'Wait ${_cooldownLeft}s'
+                                                  : _connected
+                                                  ? 'Re-login'
+                                                  : 'Login & poll',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    ElevatedButton(
-                                      onPressed: (!_connected || _busy)
-                                          ? null
-                                          : _checkUssdBalance,
-                                      child: const Text('Check'),
-                                    ),
-                                  ],
-                                ),
-                                if (_ussdResult.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                        maxHeight: 44),
-                                    child: SingleChildScrollView(
-                                      child: SelectableText(
-                                        'Reply: $_ussdResult',
-                                        style: TextStyle(
-                                            color: c.textPrimary,
-                                            fontSize: 12.5),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _fillPane(
-                            child: GlassCard(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        'DIAGNOSTICS',
-                                        style: TextStyle(
-                                          color: c.textMuted,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 1.6,
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: _busy
+                                                ? null
+                                                : _testConnection,
+                                            icon: const Icon(
+                                              Icons.radar,
+                                              size: 15,
+                                            ),
+                                            label: const Text(
+                                              'Test',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                      const Spacer(),
-                                      InkWell(
-                                        onTap: () =>
-                                            setState(() => _log.clear()),
-                                        child: Text('clear',
+                                      ],
+                                    ),
+                                    if (_loginMessage.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxHeight: 64,
+                                        ),
+                                        child: SingleChildScrollView(
+                                          child: SelectableText(
+                                            _loginMessage,
                                             style: TextStyle(
-                                                color: c.textMuted,
-                                                fontSize: 11.5)),
+                                              color: _loginOk == true
+                                                  ? c.live
+                                                  : const Color(0xFFFCA5A5),
+                                              fontSize: 12,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ),
                                       ),
                                     ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Expanded(
-                                    child: _log.isEmpty
-                                        ? Text(
-                                            'No events yet — log in to begin.',
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              GlassCard(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SectionLabel('Data balance · USSD'),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: TextField(
+                                            controller: _ussdCtrl,
+                                            decoration: const InputDecoration(
+                                              labelText: 'USSD code',
+                                              hintText: '*312#',
+                                              isDense: true,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        ElevatedButton(
+                                          onPressed: (!_connected || _busy)
+                                              ? null
+                                              : _checkUssdBalance,
+                                          child: const Text('Check'),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_ussdResult.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxHeight: 44,
+                                        ),
+                                        child: SingleChildScrollView(
+                                          child: SelectableText(
+                                            'Reply: $_ussdResult',
                                             style: TextStyle(
+                                              color: c.textPrimary,
+                                              fontSize: 12.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              _fillPane(
+                                child: GlassCard(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Text(
+                                            'DIAGNOSTICS',
+                                            style: TextStyle(
+                                              color: c.textMuted,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.6,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          InkWell(
+                                            onTap: () =>
+                                                setState(() => _log.clear()),
+                                            child: Text(
+                                              'clear',
+                                              style: TextStyle(
                                                 color: c.textMuted,
-                                                fontSize: 12),
-                                          )
-                                        : SingleChildScrollView(
-                                            child: SelectableText(
-                                              _log.join('\n'),
-                                              style: const TextStyle(
-                                                fontFamily: 'Consolas',
                                                 fontSize: 11.5,
-                                                height: 1.55,
-                                                color: Color(0xFFCBD5E1),
                                               ),
                                             ),
                                           ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Expanded(
+                                        child: _log.isEmpty
+                                            ? Text(
+                                                'No events yet — log in to begin.',
+                                                style: TextStyle(
+                                                  color: c.textMuted,
+                                                  fontSize: 12,
+                                                ),
+                                              )
+                                            : SingleChildScrollView(
+                                                child: SelectableText(
+                                                  _log.join('\n'),
+                                                  style: const TextStyle(
+                                                    fontFamily: 'Consolas',
+                                                    fontSize: 11.5,
+                                                    height: 1.55,
+                                                    color: Color(0xFFCBD5E1),
+                                                  ),
+                                                ),
+                                              ),
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
-                  ])
+                        ),
+                      ])
                     : _tab == 1
-                        ? SmsTab(
-                            client: _client,
-                            connected: _connected,
-                            log: _logLine,
-                          )
-                        : _tab == 2
-                            ? UssdTab(
-                                client: _client,
-                                connected: _connected,
-                                log: _logLine,
-                              )
-                            : _tab == 3
-                                ? InfoTab(
-                                    client: _client,
-                                    connected: _connected,
-                                    log: _logLine,
-                                  )
-                                : DeviceTab(
-                                    client: _client,
-                                    connected: _connected,
-                                    log: _logLine,
-                                  ),
+                    ? SmsTab(
+                        client: _client,
+                        connected: _connected,
+                        log: _logLine,
+                      )
+                    : _tab == 2
+                    ? UssdTab(
+                        client: _client,
+                        connected: _connected,
+                        log: _logLine,
+                      )
+                    : _tab == 3
+                    ? InfoTab(
+                        client: _client,
+                        connected: _connected,
+                        log: _logLine,
+                      )
+                    : DeviceTab(
+                        client: _client,
+                        connected: _connected,
+                        log: _logLine,
+                      ),
               ),
               const SizedBox(height: 8),
               NavigationBar(
@@ -684,39 +705,36 @@ class _DashboardPageState extends State<DashboardPage>
                 backgroundColor: Colors.transparent,
                 indicatorColor: c.accent.withAlpha(40),
                 selectedIndex: _tab,
-                onDestinationSelected: (i) =>
-                    setState(() => _tab = i),
+                onDestinationSelected: (i) => setState(() => _tab = i),
                 labelTextStyle: WidgetStatePropertyAll(
-                    TextStyle(color: c.textSecondary, fontSize: 11)),
+                  TextStyle(color: c.textSecondary, fontSize: 11),
+                ),
                 destinations: [
                   NavigationDestination(
-                      icon: Icon(Icons.dashboard_outlined,
-                          color: c.textMuted),
-                      selectedIcon:
-                          Icon(Icons.dashboard, color: c.accentText),
-                      label: 'Status'),
+                    icon: Icon(Icons.dashboard_outlined, color: c.textMuted),
+                    selectedIcon: Icon(Icons.dashboard, color: c.accentText),
+                    label: 'Status',
+                  ),
                   NavigationDestination(
-                      icon: Icon(Icons.sms_outlined, color: c.textMuted),
-                      selectedIcon:
-                          Icon(Icons.sms, color: c.accentText),
-                      label: 'SMS'),
+                    icon: Icon(Icons.sms_outlined, color: c.textMuted),
+                    selectedIcon: Icon(Icons.sms, color: c.accentText),
+                    label: 'SMS',
+                  ),
                   NavigationDestination(
-                      icon: Icon(Icons.dialpad_outlined,
-                          color: c.textMuted),
-                      selectedIcon:
-                          Icon(Icons.dialpad, color: c.accentText),
-                      label: 'USSD'),
+                    icon: Icon(Icons.dialpad_outlined, color: c.textMuted),
+                    selectedIcon: Icon(Icons.dialpad, color: c.accentText),
+                    label: 'USSD',
+                  ),
                   NavigationDestination(
-                      icon: Icon(Icons.info_outline, color: c.textMuted),
-                      selectedIcon:
-                          Icon(Icons.info, color: c.accentText),
-                      label: 'Info'),
+                    icon: Icon(Icons.info_outline, color: c.textMuted),
+                    selectedIcon: Icon(Icons.info, color: c.accentText),
+                    label: 'Info',
+                  ),
                   NavigationDestination(
-                      icon: Icon(Icons.settings_outlined,
-                          color: c.textMuted),
-                      selectedIcon:
-                          Icon(Icons.settings, color: c.accentText),
-                      label: 'Device'),
+                    icon: Icon(Icons.settings_outlined, color: c.textMuted),
+                    selectedIcon: Icon(Icons.settings, color: c.accentText),
+                    label: 'Device',
+                  ),
                 ],
               ),
             ],

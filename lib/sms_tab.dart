@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'sms_group.dart';
 import 'theme.dart';
 import 'widgets.dart';
 import 'zte_client.dart';
@@ -11,11 +12,12 @@ class SmsTab extends StatefulWidget {
   final bool connected;
   final void Function(String) log;
 
-  const SmsTab(
-      {super.key,
-      required this.client,
-      required this.connected,
-      required this.log});
+  const SmsTab({
+    super.key,
+    required this.client,
+    required this.connected,
+    required this.log,
+  });
 
   @override
   State<SmsTab> createState() => _SmsTabState();
@@ -149,8 +151,7 @@ class _SmsTabState extends State<SmsTab> {
       context,
       icon: Icons.delete_outline,
       title: 'Delete all from $sender?',
-      message:
-          '${msgs.length} messages go away. This cannot be undone.',
+      message: '${msgs.length} messages go away. This cannot be undone.',
       confirmLabel: 'Delete all',
     );
     if (ok) _deleteIds(msgs.map((m) => m.id).toList(), '$sender group');
@@ -168,8 +169,7 @@ class _SmsTabState extends State<SmsTab> {
   }
 
   Future<void> _markAllRead() async {
-    final ids =
-        _msgs.where((m) => m.isNew).map((m) => m.id).toList();
+    final ids = _msgs.where((m) => m.isNew).map((m) => m.id).toList();
     if (ids.isEmpty) {
       widget.log('nothing unread — already clean');
       return;
@@ -200,9 +200,10 @@ class _SmsTabState extends State<SmsTab> {
       icon: m.isNew ? Icons.markunread : Icons.drafts_outlined,
       title: m.number,
       subtitle: m.displayDate,
-      body: SelectableText(m.content,
-          style: TextStyle(
-              color: c.textPrimary, fontSize: 13.5, height: 1.55)),
+      body: SelectableText(
+        m.content,
+        style: TextStyle(color: c.textPrimary, fontSize: 13.5, height: 1.55),
+      ),
       actions: [
         if (m.isNew)
           OutlinedButton(
@@ -214,7 +215,9 @@ class _SmsTabState extends State<SmsTab> {
           ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
-              backgroundColor: c.danger, foregroundColor: Colors.white),
+            backgroundColor: c.danger,
+            foregroundColor: Colors.white,
+          ),
           onPressed: () {
             Navigator.of(context).pop();
             _deleteIds([m.id], 'SMS ${m.id}');
@@ -265,228 +268,47 @@ class _SmsTabState extends State<SmsTab> {
     }
   }
 
-  /// Max rows per sender before a "show all" expander kicks in — one
-  /// chatty sender must never fill the whole screen.
-  static const _groupCap = 4;
-
-  /// One sender group: header (tri-state check, counts, group actions)
-  /// + its messages. Tap header to collapse, swipe a row to delete.
+  /// Thin adapter: selection/expansion state lives here, rendering
+  /// lives in [SenderGroup] (sms_group.dart).
   Widget _group(String sender, List<SmsMessage> msgs) {
-    final c = context.zc;
-    final collapsed = _collapsed.contains(sender);
-    final showAll = _showAll.contains(sender);
-    // Newest first within the group (modem returns id-desc already).
-    final visible = showAll ? msgs : msgs.take(_groupCap).toList();
-    final hidden = msgs.length - visible.length;
     final ids = msgs.map((m) => m.id).toSet();
     final picked = ids.intersection(_selected).length;
-    final allPicked = picked == ids.length && ids.isNotEmpty;
-    final unread = msgs.where((m) => m.isNew).length;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        InkWell(
-          onTap: () => setState(() {
-            if (!_collapsed.remove(sender)) _collapsed.add(sender);
-          }),
-          onLongPress: () => setState(() {
-            _selecting = true;
-            _selected.addAll(ids);
-          }),
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: Checkbox(
-                    // Tri-state: all / some / none.
-                    value: allPicked ? true : (picked > 0 ? null : false),
-                    tristate: true,
-                    visualDensity: VisualDensity.compact,
-                    activeColor: c.accent,
-                    onChanged: (_) => setState(() {
-                      _selecting = true;
-                      if (allPicked) {
-                        _selected.removeAll(ids);
-                        if (_selected.isEmpty) _selecting = false;
-                      } else {
-                        _selected.addAll(ids);
-                      }
-                    }),
-                  ),
-                ),
-                Icon(
-                  collapsed ? Icons.chevron_right : Icons.expand_more,
-                  size: 18,
-                  color: c.textMuted,
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(sender,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                color: c.textPrimary,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13.5)),
-                      ),
-                      const SizedBox(width: 6),
-                      Text('${msgs.length}',
-                          style: TextStyle(
-                              color: c.textMuted, fontSize: 12)),
-                      if (unread > 0) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: c.accent.withAlpha(40),
-                            borderRadius: BorderRadius.circular(99),
-                          ),
-                          child: Text('$unread new',
-                              style: TextStyle(
-                                  color: c.accentText,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                // Per-group quick actions: read + nuke the sender.
-                IconButton(
-                  tooltip: 'Mark $sender read',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _busy
-                      ? null
-                      : () => _markReadIds(
-                          msgs.map((m) => m.id).toList()),
-                  icon: Icon(Icons.done_all,
-                      color: c.textMuted, size: 18),
-                ),
-                IconButton(
-                  tooltip: 'Delete all from $sender',
-                  visualDensity: VisualDensity.compact,
-                  onPressed:
-                      _busy ? null : () => _deleteGroup(sender, msgs),
-                  icon:
-                      Icon(Icons.delete_outline, color: c.danger, size: 18),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (!collapsed)
-          ...visible.map((m) {
-            final pickedRow = _selected.contains(m.id);
-            final row = InkWell(
-              onTap: () =>
-                  _selecting ? _toggleSelect(m.id) : _openMessage(m),
-              onLongPress: () => setState(() {
-                _selecting = true;
-                _selected.add(m.id);
-              }),
-              child: Padding(
-                padding: const EdgeInsets.only(
-                    left: 34, top: 5, bottom: 5, right: 2),
-                child: Row(
-                  children: [
-                    if (_selecting)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: Checkbox(
-                            value: pickedRow,
-                            visualDensity: VisualDensity.compact,
-                            activeColor: c.accent,
-                            onChanged: (_) => _toggleSelect(m.id),
-                          ),
-                        ),
-                      )
-                    else if (m.isNew)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                              color: c.accentText,
-                              shape: BoxShape.circle),
-                        ),
-                      ),
-                    Expanded(
-                      child: Text(
-                        m.content.replaceAll('\n', ' '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: pickedRow
-                              ? c.textPrimary
-                              : c.textSecondary,
-                          fontWeight:
-                              m.isNew && !pickedRow
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(m.displayDate,
-                        style: TextStyle(
-                            color: c.textMuted, fontSize: 11)),
-                  ],
-                ),
-              ),
-            );
-            return Dismissible(
-              key: ValueKey('sms-${m.id}'),
-              direction: DismissDirection.endToStart,
-              background: Container(
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.only(right: 14),
-                decoration: BoxDecoration(
-                  color: c.danger.withAlpha(40),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.delete_outline,
-                    color: c.danger, size: 20),
-              ),
-              onDismissed: (_) => _swipeDelete(m),
-              child: row,
-            );
-          }),
-        // Overflow expander: capped groups never hog the screen.
-        if (!collapsed && (hidden > 0 || showAll))
-          InkWell(
-            onTap: () => setState(() {
-              if (!_showAll.remove(sender)) _showAll.add(sender);
-            }),
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding:
-                  const EdgeInsets.only(left: 34, top: 4, bottom: 6),
-              child: Text(
-                showAll
-                    ? 'Show less'
-                    : 'Show all ${msgs.length} from $sender',
-                style: TextStyle(
-                    color: c.accentText,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-      ],
+    return SenderGroup(
+      sender: sender,
+      msgs: msgs,
+      collapsed: _collapsed.contains(sender),
+      showAll: _showAll.contains(sender),
+      selecting: _selecting,
+      selected: _selected,
+      busy: _busy,
+      onToggleCollapse: () => setState(() {
+        if (!_collapsed.remove(sender)) _collapsed.add(sender);
+      }),
+      onToggleShowAll: () => setState(() {
+        if (!_showAll.remove(sender)) _showAll.add(sender);
+      }),
+      onToggleSelect: _toggleSelect,
+      onToggleGroupPick: () => setState(() {
+        _selecting = true;
+        if (picked == ids.length && ids.isNotEmpty) {
+          _selected.removeAll(ids);
+          if (_selected.isEmpty) _selecting = false;
+        } else {
+          _selected.addAll(ids);
+        }
+      }),
+      onOpen: _openMessage,
+      onEnterSelect: (id) => setState(() {
+        _selecting = true;
+        _selected.add(id);
+      }),
+      onSelectGroup: () => setState(() {
+        _selecting = true;
+        _selected.addAll(ids);
+      }),
+      onMarkGroupRead: () => _markReadIds(msgs.map((m) => m.id).toList()),
+      onDeleteGroup: () => _deleteGroup(sender, msgs),
+      onSwipeDelete: _swipeDelete,
     );
   }
 
@@ -495,14 +317,15 @@ class _SmsTabState extends State<SmsTab> {
     final c = context.zc;
     if (!widget.connected) {
       return const EmptyState(
-          icon: Icons.sms_outlined,
-          title: 'Log in to read SMS',
-          subtitle: 'Device + SIM inbox live here.');
+        icon: Icons.sms_outlined,
+        title: 'Log in to read SMS',
+        subtitle: 'Device + SIM inbox live here.',
+      );
     }
     final capLine = _capacity.isEmpty
         ? '…'
         : 'Device ${_capacity['sms_nv_rev_total'] ?? '?'}/${_capacity['sms_nv_total'] ?? '?'} · '
-            'SIM ${_capacity['sms_sim_rev_total'] ?? '?'}/${_capacity['sms_sim_total'] ?? '?'}';
+              'SIM ${_capacity['sms_sim_rev_total'] ?? '?'}/${_capacity['sms_sim_total'] ?? '?'}';
     final filtered = _filtered;
     final groups = groupSmsBySender(filtered);
     final unreadTotal = _msgs.where((m) => m.isNew).length;
@@ -523,36 +346,42 @@ class _SmsTabState extends State<SmsTab> {
                     if (_selected.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(left: 8),
-                        child: Text('${_selected.length} picked',
-                            style: TextStyle(
-                                color: c.accentText,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700)),
+                        child: Text(
+                          '${_selected.length} picked',
+                          style: TextStyle(
+                            color: c.accentText,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       )
                     else if (unreadTotal > 0)
                       Padding(
                         padding: const EdgeInsets.only(left: 8),
-                        child: Text('$unreadTotal unread',
-                            style: TextStyle(
-                                color: c.textMuted, fontSize: 12)),
+                        child: Text(
+                          '$unreadTotal unread',
+                          style: TextStyle(color: c.textMuted, fontSize: 12),
+                        ),
                       ),
                     const Spacer(),
                     IconButton(
                       tooltip: 'Mark all read',
-                      onPressed:
-                          (_busy || unreadTotal == 0) ? null : _markAllRead,
-                      icon: Icon(Icons.done_all,
-                          color: unreadTotal == 0
-                              ? c.textMuted.withAlpha(120)
-                              : c.accentText,
-                          size: 20),
+                      onPressed: (_busy || unreadTotal == 0)
+                          ? null
+                          : _markAllRead,
+                      icon: Icon(
+                        Icons.done_all,
+                        color: unreadTotal == 0
+                            ? c.textMuted.withAlpha(120)
+                            : c.accentText,
+                        size: 20,
+                      ),
                     ),
                     const SizedBox(width: 4),
                     IconButton(
                       tooltip: 'Refresh',
                       onPressed: _busy ? null : _load,
-                      icon: Icon(Icons.refresh,
-                          color: c.accentText, size: 20),
+                      icon: Icon(Icons.refresh, color: c.accentText, size: 20),
                     ),
                   ],
                 ),
@@ -562,13 +391,15 @@ class _SmsTabState extends State<SmsTab> {
                     PillSwitcher<int>(
                       options: const [
                         PillOption(
-                            value: 1,
-                            label: 'Device',
-                            icon: Icons.smartphone_outlined),
+                          value: 1,
+                          label: 'Device',
+                          icon: Icons.smartphone_outlined,
+                        ),
                         PillOption(
-                            value: 0,
-                            label: 'SIM',
-                            icon: Icons.sd_card_outlined),
+                          value: 0,
+                          label: 'SIM',
+                          icon: Icons.sd_card_outlined,
+                        ),
                       ],
                       selected: _store,
                       onChanged: (v) {
@@ -583,9 +414,10 @@ class _SmsTabState extends State<SmsTab> {
                       },
                     ),
                     const Spacer(),
-                    Text(capLine,
-                        style: TextStyle(
-                            color: c.textMuted, fontSize: 11.5)),
+                    Text(
+                      capLine,
+                      style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
@@ -596,8 +428,11 @@ class _SmsTabState extends State<SmsTab> {
                     controller: _searchCtrl,
                     decoration: InputDecoration(
                       hintText: 'Search sender or text…',
-                      prefixIcon: Icon(Icons.search,
-                          color: c.textMuted, size: 16),
+                      prefixIcon: Icon(
+                        Icons.search,
+                        color: c.textMuted,
+                        size: 16,
+                      ),
                       suffixIcon: _search.isEmpty
                           ? null
                           : InkWell(
@@ -605,12 +440,14 @@ class _SmsTabState extends State<SmsTab> {
                                 _searchCtrl.clear();
                                 setState(() => _search = '');
                               },
-                              child: Icon(Icons.clear,
-                                  color: c.textMuted, size: 16),
+                              child: Icon(
+                                Icons.clear,
+                                color: c.textMuted,
+                                size: 16,
+                              ),
                             ),
                       isDense: true,
-                      contentPadding:
-                          const EdgeInsets.symmetric(vertical: 8),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                     onChanged: (v) => setState(() => _search = v),
                   ),
@@ -622,12 +459,13 @@ class _SmsTabState extends State<SmsTab> {
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: c.accent.withAlpha(24),
                       borderRadius: BorderRadius.circular(12),
-                      border:
-                          Border.all(color: c.accent.withAlpha(90)),
+                      border: Border.all(color: c.accent.withAlpha(90)),
                     ),
                     child: Row(
                       children: [
@@ -640,31 +478,34 @@ class _SmsTabState extends State<SmsTab> {
                           child: const Text('All'),
                         ),
                         TextButton(
-                            onPressed: () => setState(() {
-                                  _selected.clear();
-                                  _selecting = false;
-                                }),
-                            child: const Text('None')),
+                          onPressed: () => setState(() {
+                            _selected.clear();
+                            _selecting = false;
+                          }),
+                          child: const Text('None'),
+                        ),
                         const Spacer(),
                         TextButton(
-                            onPressed: _busy || _selected.isEmpty
-                                ? null
-                                : () => _markReadIds(
-                                    _selected.toList()),
-                            child: const Text('Mark read')),
+                          onPressed: _busy || _selected.isEmpty
+                              ? null
+                              : () => _markReadIds(_selected.toList()),
+                          child: const Text('Mark read'),
+                        ),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                              backgroundColor: c.danger,
-                              foregroundColor: Colors.white,
-                              padding:
-                                  const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8)),
+                            backgroundColor: c.danger,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                          ),
                           onPressed: _busy || _selected.isEmpty
                               ? null
                               : _bulkDelete,
                           child: Text(
-                              'Delete${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
+                            'Delete${_selected.isEmpty ? '' : ' (${_selected.length})'}',
+                          ),
                         ),
                       ],
                     ),
@@ -679,54 +520,55 @@ class _SmsTabState extends State<SmsTab> {
                   )
                 else if (groups.isEmpty)
                   Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Center(
-                        child: Text(
-                            _search.isNotEmpty || _unreadOnly
-                                ? 'No messages match.'
-                                : 'No messages in this store.',
-                            style: TextStyle(color: c.textMuted))),
+                      child: Text(
+                        _search.isNotEmpty || _unreadOnly
+                            ? 'No messages match.'
+                            : 'No messages in this store.',
+                        style: TextStyle(color: c.textMuted),
+                      ),
+                    ),
                   )
                 else ...[
                   Row(
                     children: [
                       FilterChip(
-                        label: const Text('Unread',
-                            style: TextStyle(fontSize: 12)),
+                        label: const Text(
+                          'Unread',
+                          style: TextStyle(fontSize: 12),
+                        ),
                         selected: _unreadOnly,
                         visualDensity: VisualDensity.compact,
-                        onSelected: (v) =>
-                            setState(() => _unreadOnly = v),
+                        onSelected: (v) => setState(() => _unreadOnly = v),
                       ),
                       const SizedBox(width: 10),
                       Flexible(
                         child: Text(
-                            '${groups.length} sender${groups.length == 1 ? '' : 's'} · ${filtered.length} messages',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                color: c.textMuted, fontSize: 11.5)),
+                          '${groups.length} sender${groups.length == 1 ? '' : 's'} · ${filtered.length} messages',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                        ),
                       ),
                       const Spacer(),
                       InkWell(
                         onTap: () => setState(() {
                           // Toggle: collapse all if any expanded, else expand.
                           final anyOpen = groups.any(
-                              (g) => !_collapsed.contains(g.key));
+                            (g) => !_collapsed.contains(g.key),
+                          );
                           _collapsed.clear();
                           if (anyOpen) {
-                            _collapsed.addAll(
-                                groups.map((g) => g.key));
+                            _collapsed.addAll(groups.map((g) => g.key));
                           }
                         }),
                         child: Text(
-                            groups.any(
-                                    (g) => !_collapsed.contains(g.key))
-                                ? 'collapse all'
-                                : 'expand all',
-                            style: TextStyle(
-                                color: c.textMuted, fontSize: 11.5)),
+                          groups.any((g) => !_collapsed.contains(g.key))
+                              ? 'collapse all'
+                              : 'expand all',
+                          style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                        ),
                       ),
                     ],
                   ),
@@ -752,7 +594,9 @@ class _SmsTabState extends State<SmsTab> {
                         controller: _numCtrl,
                         keyboardType: TextInputType.phone,
                         decoration: const InputDecoration(
-                            labelText: 'To', isDense: true),
+                          labelText: 'To',
+                          isDense: true,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -760,7 +604,9 @@ class _SmsTabState extends State<SmsTab> {
                       child: TextField(
                         controller: _textCtrl,
                         decoration: const InputDecoration(
-                            labelText: 'Message', isDense: true),
+                          labelText: 'Message',
+                          isDense: true,
+                        ),
                         maxLines: 1,
                         onSubmitted: (_) => _send(),
                       ),
@@ -789,16 +635,16 @@ class _SmsTabState extends State<SmsTab> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     ConstrainedBox(
-                      constraints:
-                          const BoxConstraints(maxWidth: 230),
+                      constraints: const BoxConstraints(maxWidth: 230),
                       child: SizedBox(
                         width: 230,
                         child: TextField(
                           controller: _centerCtrl,
                           keyboardType: TextInputType.phone,
                           decoration: const InputDecoration(
-                              labelText: 'Center number',
-                              isDense: true),
+                            labelText: 'Center number',
+                            isDense: true,
+                          ),
                         ),
                       ),
                     ),
@@ -807,18 +653,26 @@ class _SmsTabState extends State<SmsTab> {
                       child: DropdownButtonFormField<String>(
                         initialValue: _validity,
                         decoration: const InputDecoration(
-                            labelText: 'Validity', isDense: true),
+                          labelText: 'Validity',
+                          isDense: true,
+                        ),
                         items: const [
                           DropdownMenuItem(
-                              value: 'twelve_hours',
-                              child: Text('12 hours')),
+                            value: 'twelve_hours',
+                            child: Text('12 hours'),
+                          ),
                           DropdownMenuItem(
-                              value: 'one_day', child: Text('1 day')),
+                            value: 'one_day',
+                            child: Text('1 day'),
+                          ),
                           DropdownMenuItem(
-                              value: 'one_week', child: Text('1 week')),
+                            value: 'one_week',
+                            child: Text('1 week'),
+                          ),
                           DropdownMenuItem(
-                              value: 'largest',
-                              child: Text('Maximum')),
+                            value: 'largest',
+                            child: Text('Maximum'),
+                          ),
                         ],
                         onChanged: (v) =>
                             setState(() => _validity = v ?? _validity),
@@ -830,13 +684,15 @@ class _SmsTabState extends State<SmsTab> {
                         Switch(
                           value: _report,
                           activeColor: c.accent,
-                          onChanged: (v) =>
-                              setState(() => _report = v),
+                          onChanged: (v) => setState(() => _report = v),
                         ),
-                        Text('Reports',
-                            style: TextStyle(
-                                color: c.textSecondary,
-                                fontSize: 12.5)),
+                        Text(
+                          'Reports',
+                          style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 12.5,
+                          ),
+                        ),
                       ],
                     ),
                     ElevatedButton(
