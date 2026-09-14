@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
@@ -27,10 +29,7 @@ class AmbientBackground extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
-                    colors: [
-                      c.accent.withAlpha(56),
-                      c.accent.withAlpha(0),
-                    ],
+                    colors: [c.accent.withAlpha(56), c.accent.withAlpha(0)],
                   ),
                 ),
               ),
@@ -81,9 +80,7 @@ class GlassCard extends StatelessWidget {
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: highlighted
-            ? c.accent.withAlpha(28)
-            : c.surface.withAlpha(160),
+        color: highlighted ? c.accent.withAlpha(28) : c.surface.withAlpha(160),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: highlighted ? c.accent.withAlpha(140) : c.border,
@@ -105,7 +102,8 @@ class GlassCard extends StatelessWidget {
 }
 
 /// Small caps section label, Rhema style.
-class SectionLabel extends StatelessWidget {  final String text;
+class SectionLabel extends StatelessWidget {
+  final String text;
 
   const SectionLabel(this.text, {super.key});
 
@@ -234,8 +232,8 @@ class SignalBars extends StatelessWidget {
     final color = level <= 0
         ? c.danger
         : level <= 2
-            ? c.accent
-            : c.live;
+        ? c.accent
+        : c.live;
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -256,7 +254,8 @@ class SignalBars extends StatelessWidget {
 }
 
 /// Battery ring with % in the middle.
-class BatteryRing extends StatelessWidget {  final int? percent; // null = unknown
+class BatteryRing extends StatelessWidget {
+  final int? percent; // null = unknown
   final bool charging;
   final double size;
 
@@ -274,10 +273,10 @@ class BatteryRing extends StatelessWidget {  final int? percent; // null = unkno
     final color = percent == null
         ? c.textMuted
         : charging
-            ? c.live
-            : percent! <= 20
-                ? c.danger
-                : c.accent;
+        ? c.live
+        : percent! <= 20
+        ? c.danger
+        : c.accent;
     return SizedBox(
       width: size,
       height: size,
@@ -357,8 +356,10 @@ class GlassModal extends StatelessWidget {
         child: Container(
           width: width,
           constraints: BoxConstraints(
-            maxHeight: (MediaQuery.sizeOf(context).height - 88)
-                .clamp(280.0, 640.0),
+            maxHeight: (MediaQuery.sizeOf(context).height - 88).clamp(
+              280.0,
+              640.0,
+            ),
           ),
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
@@ -385,8 +386,7 @@ class GlassModal extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: accent.withAlpha(40),
                       borderRadius: BorderRadius.circular(10),
-                      border:
-                          Border.all(color: accent.withAlpha(90)),
+                      border: Border.all(color: accent.withAlpha(90)),
                     ),
                     child: Icon(icon, color: accentText, size: 18),
                   ),
@@ -411,7 +411,9 @@ class GlassModal extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                color: c.textMuted, fontSize: 11.5),
+                              color: c.textMuted,
+                              fontSize: 11.5,
+                            ),
                           ),
                       ],
                     ),
@@ -422,16 +424,13 @@ class GlassModal extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                     child: Padding(
                       padding: const EdgeInsets.all(6),
-                      child: Icon(Icons.close,
-                          color: c.textMuted, size: 16),
+                      child: Icon(Icons.close, color: c.textMuted, size: 16),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              Flexible(
-                child: SingleChildScrollView(child: body),
-              ),
+              Flexible(child: SingleChildScrollView(child: body)),
               if (actions != null && actions!.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Row(
@@ -471,8 +470,7 @@ Future<T?> showGlassModal<T>(
     builder: (ctx) => Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding:
-          const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: GlassModal(
         icon: icon,
         title: title,
@@ -501,9 +499,10 @@ Future<bool> confirmAction(
     icon: icon,
     title: title,
     danger: danger,
-    body: Text(message,
-        style: TextStyle(
-            color: c.textSecondary, fontSize: 13.5, height: 1.5)),
+    body: Text(
+      message,
+      style: TextStyle(color: c.textSecondary, fontSize: 13.5, height: 1.5),
+    ),
     actions: [
       OutlinedButton(
         onPressed: () => Navigator.of(context).pop(false),
@@ -512,7 +511,9 @@ Future<bool> confirmAction(
       ElevatedButton(
         style: danger
             ? ElevatedButton.styleFrom(
-                backgroundColor: c.danger, foregroundColor: Colors.white)
+                backgroundColor: c.danger,
+                foregroundColor: Colors.white,
+              )
             : null,
         onPressed: () => Navigator.of(context).pop(true),
         child: Text(confirmLabel),
@@ -570,7 +571,9 @@ class PillSwitcher<T> extends StatelessWidget {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: o.value == selected
                           ? c.accent.withAlpha(36)
@@ -587,25 +590,29 @@ class PillSwitcher<T> extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         if (o.icon != null) ...[
-                          Icon(o.icon,
-                              size: 13,
-                              color: o.value == selected
-                                  ? c.accentText
-                                  : c.textMuted),
+                          Icon(
+                            o.icon,
+                            size: 13,
+                            color: o.value == selected
+                                ? c.accentText
+                                : c.textMuted,
+                          ),
                           const SizedBox(width: 5),
                         ],
-                        Text(o.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: o.value == selected
-                                  ? c.accentText
-                                  : c.textMuted,
-                              fontSize: 12,
-                              fontWeight: o.value == selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                            )),
+                        Text(
+                          o.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: o.value == selected
+                                ? c.accentText
+                                : c.textMuted,
+                            fontSize: 12,
+                            fontWeight: o.value == selected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -624,8 +631,12 @@ class EmptyState extends StatelessWidget {
   final String title;
   final String? subtitle;
 
-  const EmptyState(
-      {super.key, required this.icon, required this.title, this.subtitle});
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -647,22 +658,105 @@ class EmptyState extends StatelessWidget {
               child: Icon(icon, color: c.accentText, size: 24),
             ),
             const SizedBox(height: 12),
-            Text(title,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700)),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             if (subtitle != null) ...[
               const SizedBox(height: 4),
-              Text(subtitle!,
-                  textAlign: TextAlign.center,
-                  style:
-                      TextStyle(color: c.textMuted, fontSize: 12.5)),
+              Text(
+                subtitle!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: c.textMuted, fontSize: 12.5),
+              ),
             ],
           ],
         ),
       ),
+    );
+  }
+}
+
+/// "13d 04:12:33", "04:12:33" under a day, "expired" past zero.
+/// Pure + tested; [CountdownText] ticks it live.
+String formatCountdown(Duration left) {
+  if (left.inSeconds <= 0) return 'expired';
+  final d = left.inDays;
+  final h = left.inHours % 24;
+  final m = left.inMinutes % 60;
+  final s = left.inSeconds % 60;
+  final clock =
+      '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  return d > 0 ? '${d}d $clock' : clock;
+}
+
+/// Self-ticking countdown to [target]. Owns its 1s timer and only ever
+/// rebuilds itself — cheap enough to leave on the dashboard permanently.
+class CountdownText extends StatefulWidget {
+  final DateTime target;
+  final TextStyle? style;
+
+  const CountdownText({super.key, required this.target, this.style});
+
+  @override
+  State<CountdownText> createState() => _CountdownTextState();
+}
+
+class _CountdownTextState extends State<CountdownText> {
+  Timer? _timer;
+  late Duration _left;
+
+  @override
+  void initState() {
+    super.initState();
+    _left = widget.target.difference(DateTime.now());
+    if (_left.inSeconds > 0) {
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    }
+  }
+
+  @override
+  void didUpdateWidget(CountdownText old) {
+    super.didUpdateWidget(old);
+    if (old.target != widget.target) {
+      _timer?.cancel();
+      _left = widget.target.difference(DateTime.now());
+      if (_left.inSeconds > 0 && mounted) {
+        _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+      }
+    }
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    setState(() => _left = widget.target.difference(DateTime.now()));
+    if (_left.inSeconds <= 0) _timer?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return Text(
+      formatCountdown(_left),
+      style:
+          (widget.style ??
+                  TextStyle(
+                    color: c.accentText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ))
+              .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
     );
   }
 }

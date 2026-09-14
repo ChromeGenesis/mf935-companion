@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:zte_mf935_app/main.dart';
+import 'package:zte_mf935_app/widgets.dart';
 import 'package:zte_mf935_app/zte_client.dart';
 
 void main() {
@@ -153,6 +154,14 @@ void main() {
         jsonDecode(jsonEncode(snap.toJson())) as Map));
     expect(back.totalMb, closeTo(snap.totalMb, 0.01));
     expect(back.bundles.length, 2);
+  });
+
+  test('Countdown formatter', () {
+    expect(formatCountdown(const Duration(days: 13, hours: 4, minutes: 12, seconds: 33)), '13d 04:12:33');
+    expect(formatCountdown(const Duration(hours: 5)), '05:00:00');
+    expect(formatCountdown(const Duration(seconds: 90)), '00:01:30');
+    expect(formatCountdown(Duration.zero), 'expired');
+    expect(formatCountdown(const Duration(seconds: -5)), 'expired');
   });
 
   test('SMS grouping keeps first-seen sender order', () {

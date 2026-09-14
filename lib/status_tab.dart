@@ -247,6 +247,27 @@ class _StatusTabState extends State<StatusTab> {
                 : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
+          // Live countdown to the next expiry — the global "when does
+          // my data die" answer, ticking every second.
+          if (b.nextExpiry?.expiry != null &&
+              b.nextExpiry!.expiry!.isAfter(DateTime.now())) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(Icons.hourglass_bottom, size: 14, color: c.accentText),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    '${b.nextExpiry!.name} ends in ',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                  ),
+                ),
+                CountdownText(target: b.nextExpiry!.expiry!),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           for (final bundle in b.bundles)
             Padding(
@@ -366,6 +387,7 @@ class _StatusTabState extends State<StatusTab> {
     final tx = double.tryParse('${s['monthly_tx_bytes'] ?? '0'}') ?? 0;
     final usedMb = (rx + tx) / (1024 * 1024);
     final liveDown = double.tryParse('${s['realtime_rx_thrpt'] ?? ''}');
+    final liveUp = double.tryParse('${s['realtime_tx_thrpt'] ?? ''}');
 
     return Column(
       children: [
@@ -414,11 +436,17 @@ class _StatusTabState extends State<StatusTab> {
                           children: [
                             SignalBars(level: signal ?? -1, height: 22),
                             const SizedBox(width: 8),
-                            Text(
-                              signal == null ? 'signal —' : 'signal $signal/5',
-                              style: TextStyle(
-                                color: c.textSecondary,
-                                fontSize: 12.5,
+                            Flexible(
+                              child: Text(
+                                signal == null
+                                    ? 'signal n/a'
+                                    : 'signal $signal/5',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: c.textSecondary,
+                                  fontSize: 12.5,
+                                ),
                               ),
                             ),
                           ],
@@ -481,6 +509,15 @@ class _StatusTabState extends State<StatusTab> {
                   ? 'n/a'
                   : ZteClient.formatRate(liveDown),
               caption: 'live down',
+            ),
+            StatTile(
+              icon: Icons.upload_outlined,
+              value: !widget.connected
+                  ? '—'
+                  : liveUp == null
+                  ? 'n/a'
+                  : ZteClient.formatRate(liveUp),
+              caption: 'live up',
             ),
             StatTile(
               icon: Icons.markunread_mailbox_outlined,
