@@ -7,7 +7,6 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'poller.dart';
-import 'device_tab.dart';
 import 'info_tab.dart';
 import 'notifications.dart';
 import 'sidebar.dart';
@@ -345,38 +344,184 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// Status panes: side-by-side on desktop, stacked + scrollable on
-  /// narrow screens. One composition path (SSOT) — no duplicated cards.
-  Widget _statusFlex(List<Widget> panes) {
-    if (!_narrow) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [panes[0], const SizedBox(width: 12), panes[1]],
+  /// Status panes: side-by-side on desktop (log fills to the bottom),
+  /// stacked + scrollable on narrow screens. One composition path (SSOT).
+  Widget _statusBody(Widget left) {
+    final conn = _connectionCard();
+    final log = _logCard();
+    if (_narrow) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Column(
+          children: [
+            left,
+            const SizedBox(height: 12),
+            conn,
+            const SizedBox(height: 10),
+            SizedBox(height: 220, child: log),
+          ],
+        ),
       );
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Column(children: [panes[0], const SizedBox(height: 12), panes[1]]),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 11,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: left,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 9,
+          child: Column(
+            children: [
+              conn,
+              const SizedBox(height: 10),
+              Expanded(child: log),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
-  /// Flex child: scrollable pane on desktop (content can exceed the
-  /// window — overflow used to paint over the nav bar in release builds),
-  /// plain child in narrow mode (the outer scroll owns the height).
-  Widget _pane({required int flex, required Widget child}) => _narrow
-      ? child
-      : Expanded(
-          flex: flex,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: child,
+  /// Connection card: gateway, password, login/test, latched status.
+  Widget _connectionCard() {
+    final c = context.zc;
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SectionLabel('Connection'),
+          TextField(
+            controller: _ipCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Gateway IP',
+              hintText: '192.168.0.1',
+              isDense: true,
+            ),
           ),
-        );
+          const SizedBox(height: 8),
+          TextField(
+            controller: _passCtrl,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Admin password',
+              hintText: 'Sticker on the MiFi',
+              isDense: true,
+            ),
+            onSubmitted: (_) => _busy ? null : _doLogin(),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (_busy || _cooldownLeft > 0) ? null : _doLogin,
+                  icon: const Icon(Icons.login, size: 15),
+                  label: Text(
+                    _cooldownLeft > 0
+                        ? 'Wait ${_cooldownLeft}s'
+                        : _connected
+                        ? 'Re-login'
+                        : 'Login & poll',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _testConnection,
+                  icon: const Icon(Icons.radar, size: 15),
+                  label: const Text('Test',
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            ],
+          ),
+          if (_loginMessage.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 64),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _loginMessage,
+                  style: TextStyle(
+                    color: _loginOk == true
+                        ? c.live
+                        : const Color(0xFFFCA5A5),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
-  /// Log box: fixed height everywhere (an Expanded would be unbounded
-  /// inside the pane scroll and crash).
-  Widget _fillPane({required Widget child}) =>
-      SizedBox(height: 220, child: child);
+  /// Diagnostics log: fills whatever height it's given (Expanded on
+  /// desktop, a fixed box on narrow).
+  Widget _logCard() {
+    final c = context.zc;
+    return GlassCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'DIAGNOSTICS',
+                style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.6,
+                ),
+              ),
+              const Spacer(),
+              InkWell(
+                onTap: () => setState(() => _log.clear()),
+                child: Text(
+                  'clear',
+                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Expanded(
+            child: _log.isEmpty
+                ? Text(
+                    'No events yet — log in to begin.',
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                  )
+                : SingleChildScrollView(
+                    child: SelectableText(
+                      _log.join('\n'),
+                      style: const TextStyle(
+                        fontFamily: 'Consolas',
+                        fontSize: 11.5,
+                        height: 1.55,
+                        color: Color(0xFFCBD5E1),
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void onWindowClose() async {
@@ -467,184 +612,17 @@ class _DashboardPageState extends State<DashboardPage>
                 const SizedBox(height: 12),
                 // ── Tab content ──
                 Expanded(
-                  child: _tab == 0
-                      ? _statusFlex([
-                          // ── Left: status (owns its balance lifecycle) ──
-                          _pane(
-                            flex: 11,
-                            child: StatusTab(
-                              client: _client,
-                              connected: _connected,
-                              status: _status,
-                              log: _logLine,
-                              notify: _notifyNow,
-                              onRefreshNow: _refreshNow,
-                              balanceFeed: _balanceFeed,
-                              onJumpTab: (i) => setState(() => _tab = i),
-                            ),
-                          ),
-                          // ── Right: actions ──
-                          _pane(
-                            flex: 9,
-                            child: Column(
-                              children: [
-                                GlassCard(
-                                  padding: const EdgeInsets.all(14),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const SectionLabel('Connection'),
-                                      TextField(
-                                        controller: _ipCtrl,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Gateway IP',
-                                          hintText: '192.168.0.1',
-                                          isDense: true,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      TextField(
-                                        controller: _passCtrl,
-                                        obscureText: true,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Admin password',
-                                          hintText: 'Sticker on the MiFi',
-                                          isDense: true,
-                                        ),
-                                        onSubmitted: (_) =>
-                                            _busy ? null : _doLogin(),
-                                      ),
-                                      const SizedBox(height: 10),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: ElevatedButton.icon(
-                                              onPressed:
-                                                  (_busy || _cooldownLeft > 0)
-                                                  ? null
-                                                  : _doLogin,
-                                              icon: const Icon(
-                                                Icons.login,
-                                                size: 15,
-                                              ),
-                                              label: Text(
-                                                _cooldownLeft > 0
-                                                    ? 'Wait ${_cooldownLeft}s'
-                                                    : _connected
-                                                    ? 'Re-login'
-                                                    : 'Login & poll',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: OutlinedButton.icon(
-                                              onPressed: _busy
-                                                  ? null
-                                                  : _testConnection,
-                                              icon: const Icon(
-                                                Icons.radar,
-                                                size: 15,
-                                              ),
-                                              label: const Text(
-                                                'Test',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      if (_loginMessage.isNotEmpty) ...[
-                                        const SizedBox(height: 8),
-                                        ConstrainedBox(
-                                          constraints: const BoxConstraints(
-                                            maxHeight: 64,
-                                          ),
-                                          child: SingleChildScrollView(
-                                            child: SelectableText(
-                                              _loginMessage,
-                                              style: TextStyle(
-                                                color: _loginOk == true
-                                                    ? c.live
-                                                    : const Color(0xFFFCA5A5),
-                                                fontSize: 12,
-                                                height: 1.4,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                _fillPane(
-                                  child: GlassCard(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Text(
-                                              'DIAGNOSTICS',
-                                              style: TextStyle(
-                                                color: c.textMuted,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w700,
-                                                letterSpacing: 1.6,
-                                              ),
-                                            ),
-                                            const Spacer(),
-                                            InkWell(
-                                              onTap: () =>
-                                                  setState(() => _log.clear()),
-                                              child: Text(
-                                                'clear',
-                                                style: TextStyle(
-                                                  color: c.textMuted,
-                                                  fontSize: 11.5,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Expanded(
-                                          child: _log.isEmpty
-                                              ? Text(
-                                                  'No events yet — log in to begin.',
-                                                  style: TextStyle(
-                                                    color: c.textMuted,
-                                                    fontSize: 12,
-                                                  ),
-                                                )
-                                              : SingleChildScrollView(
-                                                  child: SelectableText(
-                                                    _log.join('\n'),
-                                                    style: const TextStyle(
-                                                      fontFamily: 'Consolas',
-                                                      fontSize: 11.5,
-                                                      height: 1.55,
-                                                      color: Color(0xFFCBD5E1),
-                                                    ),
-                                                  ),
-                                                ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ])
+child: _tab == 0
+                      ? _statusBody(StatusTab(
+                          client: _client,
+                          connected: _connected,
+                          status: _status,
+                          log: _logLine,
+                          notify: _notifyNow,
+                          onRefreshNow: _refreshNow,
+                          balanceFeed: _balanceFeed,
+                          onJumpTab: (i) => setState(() => _tab = i),
+                        ))
                       : _tab == 1
                       ? SmsTab(
                           client: _client,
@@ -657,13 +635,7 @@ class _DashboardPageState extends State<DashboardPage>
                           connected: _connected,
                           log: _logLine,
                         )
-                      : _tab == 3
-                      ? InfoTab(
-                          client: _client,
-                          connected: _connected,
-                          log: _logLine,
-                        )
-                      : DeviceTab(
+                      : InfoTab(
                           client: _client,
                           connected: _connected,
                           log: _logLine,
@@ -706,11 +678,6 @@ class _DashboardPageState extends State<DashboardPage>
                         icon: Icon(Icons.info_outline, color: c.textMuted),
                         selectedIcon: Icon(Icons.info, color: c.accentText),
                         label: 'Info',
-                      ),
-                      NavigationDestination(
-                        icon: Icon(Icons.settings_outlined, color: c.textMuted),
-                        selectedIcon: Icon(Icons.settings, color: c.accentText),
-                        label: 'Device',
                       ),
                     ],
                   ),

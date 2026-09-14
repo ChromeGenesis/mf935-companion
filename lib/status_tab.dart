@@ -62,6 +62,15 @@ class _StatusTabState extends State<StatusTab> {
   final _limitSizeCtrl = TextEditingController();
   final _limitAlertCtrl = TextEditingController();
 
+  // Device management (consolidated from the Device tab): connected
+  // clients, power-save presets, reboot/shutdown.
+  List<AttachedDevice> _devices = [];
+  bool _devicesBusy = false;
+  DateTime? _devicesAt;
+  bool _devicesOpen = false;
+  String _powerSave = '';
+  bool _powerBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -91,9 +100,10 @@ class _StatusTabState extends State<StatusTab> {
   void _onConnect() {
     _balanceTimer?.cancel();
     _balanceTimer = Timer.periodic(_balanceEvery, (_) => _refreshBalance());
-    _refreshDeviceCount();
+    _refreshDevices();
     _refreshBalance();
     _loadLimit();
+    _loadPowerSave();
   }
 
   Future<void> _loadCached() async {
@@ -176,15 +186,312 @@ class _StatusTabState extends State<StatusTab> {
     return v.isEmpty ? 'n/a' : v;
   }
 
-  /// Attached-station count (separate endpoint, best-effort).
-  Future<void> _refreshDeviceCount() async {
+  /// Attached-station list (separate endpoint, best-effort). Feeds the
+  /// device-info card AND the devices count tile with one fetch.
+  Future<void> _refreshDevices() async {
+    if (!widget.connected || _devicesBusy) return;
+    setState(() => _devicesBusy = true);
     try {
       final devs = await widget.client.getConnectedDevices();
       if (!mounted) return;
-      setState(() => _deviceCount = devs.length);
+      setState(() {
+        _devices = devs;
+        _deviceCount = devs.length;
+        _devicesAt = DateTime.now();
+      });
     } catch (_) {
-      // Leave the last known count; tile shows — when never fetched.
+      // Leave the last known list; count tile shows — when never fetched.
+    } finally {
+      if (mounted) setState(() => _devicesBusy = false);
     }
+  }
+
+  Future<void> _loadPowerSave() async {
+    if (!widget.connected) return;
+    try {
+      final raw = await widget.client.getPowerSave();
+      if (!mounted) return;
+      setState(() => _powerSave = raw);
+    } catch (e) {
+      widget.log('power-save load failed: $e');
+    }
+  }
+
+  Future<void> _applyPowerSave() async {
+    if (!widget.connected) return;
+    setState(() => _powerBusy = true);
+    try {
+      final mode = _powerSave;
+      final ok = await widget.client.setPowerSave(mode);
+      widget.log(ok ? 'power-save set to "$mode"' : 'power-save refused');
+    } catch (e) {
+      widget.log('power-save failed: $e');
+    } finally {
+      if (mounted) setState(() => _powerBusy = false);
+    }
+  }
+
+  Future<void> _devicePowerAction(String kind) async {
+    final confirm = await confirmAction(
+      context,
+      icon: kind == 'reboot' ? Icons.restart_alt : Icons.power_settings_new,
+      title: kind == 'reboot' ? 'Reboot the MiFi?' : 'Shut down?',
+      message: kind == 'reboot'
+          ? 'WiFi drops for ~1 minute, then it comes back. The app will keep polling.'
+          : 'The MiFi turns OFF. You will need to power it on physically.',
+      confirmLabel: kind == 'reboot' ? 'Reboot' : 'Shut down',
+    );
+    if (!confirm) return;
+    try {
+      final raw = kind == 'reboot'
+          ? await widget.client.reboot()
+          : await widget.client.shutdown();
+      widget.log('$kind sent. Modem said: $raw');
+    } catch (e) {
+      // Reboot/shutdown kills the HTTP connection mid-reply — a transport
+      // error here usually MEANS it worked.
+      widget.log('$kind sent (connection dropped as expected: $e)');
+    }
+  }
+
+  /// Connected clients with metadata, expandable. Count + freshness in
+  /// the header; per-client hostname, IP, MAC, and connection time
+  /// (shown only when the firmware reports it).
+  Widget _devicesCard(ZteColors c) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const SectionLabel('Connected devices'),
+              if (_devicesAt != null)
+                Text(
+                  ZteClient.timeAgo(_devicesAt!),
+                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Refresh clients',
+                onPressed: !widget.connected || _devicesBusy
+                    ? null
+                    : _refreshDevices,
+                icon: Icon(Icons.refresh, color: c.accentText, size: 19),
+              ),
+              IconButton(
+                tooltip: _devicesOpen ? 'Collapse' : 'Expand',
+                onPressed: () => setState(() => _devicesOpen = !_devicesOpen),
+                icon: Icon(
+                  _devicesOpen ? Icons.expand_less : Icons.expand_more,
+                  color: c.textMuted,
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+          if (!_devicesOpen)
+            Text(
+              _devices.isEmpty
+                  ? 'No stations reported.'
+                  : '${_devices.length} client${_devices.length == 1 ? '' : 's'} connected.',
+              style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+            )
+          else if (_devicesBusy && _devices.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(10),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_devices.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(
+                'No stations reported — nothing is connected over WiFi.',
+                style: TextStyle(color: c.textMuted, fontSize: 12.5),
+              ),
+            )
+          else
+            Column(
+              children: [
+                for (final d in _devices)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(70),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: c.borderSubtle),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              color: c.accent.withAlpha(26),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(Icons.devices_outlined,
+                                size: 16, color: c.accentText),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  d.hostname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: c.textPrimary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    _meta(c, Icons.router_outlined, d.ip),
+                                    if (d.mac.isNotEmpty) ...[
+                                      const SizedBox(width: 8),
+                                      _meta(c, Icons.lan_outlined, d.mac),
+                                    ],
+                                    if (d.connectedAt != null) ...[
+                                      const SizedBox(width: 8),
+                                      _meta(
+                                          c,
+                                          Icons.schedule_outlined,
+                                          'joined ${ZteClient.timeAgo(d.connectedAt!)}'),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _meta(ZteColors c, IconData icon, String text) {
+    return Flexible(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: c.textMuted),
+          const SizedBox(width: 3),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: c.textMuted,
+                fontSize: 10.5,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Firmware power-save as explicit presets, never free text. Unknown
+  /// raw values surface as their own option so nothing is lost.
+  Widget _powerCard(ZteColors c) {
+    final options = <String, String>{
+      '0': 'Off — always connected',
+      '1': 'Auto power save',
+    };
+    final current = _powerSave;
+    if (current.isNotEmpty && !options.containsKey(current)) {
+      options[current] = 'Current: "$current"';
+    }
+    final normalized = options.containsKey(current) ? current : '0';
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SectionLabel('Power save'),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: normalized,
+                  isDense: true,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Power save',
+                    isDense: true,
+                  ),
+                  items: [
+                    for (final e in options.entries)
+                      DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value),
+                      ),
+                  ],
+                  onChanged: !widget.connected
+                      ? null
+                      : (v) => setState(() => _powerSave = v ?? '0'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: !widget.connected || _powerBusy
+                    ? null
+                    : _applyPowerSave,
+                child: const Text('Apply'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Power save pauses WiFi after idle — the app may lose the connection while it "sleeps".',
+            style: TextStyle(color: c.textMuted, fontSize: 11.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Device actions, confirmed before sending.
+  Widget _actionsCard(ZteColors c) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: !widget.connected ? null : () => _devicePowerAction('reboot'),
+              icon: const Icon(Icons.restart_alt, size: 16),
+              label: const Text('Reboot MiFi'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: !widget.connected ? null : () => _devicePowerAction('shutdown'),
+              icon: Icon(Icons.power_settings_new, size: 16, color: c.danger),
+              label: Text('Shut down', style: TextStyle(color: c.danger)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Firmware data cap: load on connect, save on demand.
@@ -716,15 +1023,18 @@ class _StatusTabState extends State<StatusTab> {
                     ? (widget.connected ? '…' : '—')
                     : '$_deviceCount',
                 caption: 'devices',
-                onTap: widget.onJumpTab == null
-                    ? null
-                    : () => widget.onJumpTab!(4),
               ),
             ],
           ),
         ),
         const SizedBox(height: 10),
         _limitCard(c),
+        const SizedBox(height: 10),
+        _devicesCard(c),
+        const SizedBox(height: 10),
+        _powerCard(c),
+        const SizedBox(height: 10),
+        _actionsCard(c),
       ],
     );
   }

@@ -23,7 +23,6 @@ class AppSidebar extends StatelessWidget {
     (Icons.sms_outlined, Icons.sms, 'SMS'),
     (Icons.dialpad_outlined, Icons.dialpad, 'USSD'),
     (Icons.info_outline, Icons.info, 'Info'),
-    (Icons.settings_outlined, Icons.settings, 'Device'),
   ];
 
   @override

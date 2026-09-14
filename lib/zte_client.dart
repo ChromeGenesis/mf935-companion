@@ -81,10 +81,15 @@ class AttachedDevice {
   final String hostname;
   final String ip;
 
+  /// When the station joined the WiFi (firmware `ctime` seconds). Null
+  /// when the modem doesn't report it — displayed only when present.
+  final DateTime? connectedAt;
+
   const AttachedDevice({
     required this.mac,
     required this.hostname,
     required this.ip,
+    this.connectedAt,
   });
 }
 
@@ -1300,10 +1305,16 @@ class ZteClient {
     return raw.whereType<Map>().map((e) {
       final map = Map<String, dynamic>.from(e);
       final host = '${map['hostname'] ?? ''}';
+      DateTime? connectedAt;
+      final ctime = int.tryParse('${map['ctime'] ?? ''}');
+      if (ctime != null && ctime > 0) {
+        connectedAt = DateTime.fromMillisecondsSinceEpoch(ctime * 1000);
+      }
       return AttachedDevice(
         mac: '${map['mac_addr'] ?? ''}',
         hostname: host.isEmpty ? 'unknown' : host,
         ip: '${map['ip_addr'] ?? ''}',
+        connectedAt: connectedAt,
       );
     }).toList();
   }

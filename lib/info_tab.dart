@@ -24,6 +24,7 @@ class _InfoTabState extends State<InfoTab> {
   Map<String, dynamic> _info = {};
   Map<String, dynamic> _stats = {};
   bool _busy = false;
+  DateTime? _updatedAt;
 
   @override
   void initState() {
@@ -49,6 +50,7 @@ class _InfoTabState extends State<InfoTab> {
       setState(() {
         _info = Map<String, dynamic>.from(results[0] as Map);
         _stats = Map<String, dynamic>.from(results[1] as Map);
+        _updatedAt = DateTime.now();
       });
       widget.log('device info + stats loaded');
     } catch (e) {
@@ -151,20 +153,34 @@ class _InfoTabState extends State<InfoTab> {
     );
   }
 
-  Widget _row(String label, String value) {
+  Widget _row(String label, String value, {IconData? icon, Color? valueColor}) {
     final c = context.zc;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           SizedBox(
-            width: 150,
+            width: 18,
+            height: 18,
+            child: icon == null
+                ? const SizedBox.shrink()
+                : Icon(icon, size: 16, color: c.textMuted),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 120,
             child: Text(label,
                 style: TextStyle(color: c.textMuted, fontSize: 12.5)),
           ),
           Expanded(
-            child: SelectableText(value.isEmpty ? '—' : value,
-                style: TextStyle(color: c.textPrimary, fontSize: 12.5)),
+            child: SelectableText(
+              value.isEmpty ? '—' : value,
+              style: TextStyle(
+                color: valueColor ?? c.textPrimary,
+                fontSize: 12.5,
+                fontWeight: valueColor != null ? FontWeight.w700 : null,
+              ),
+            ),
           ),
         ],
       ),
@@ -203,25 +219,40 @@ class _InfoTabState extends State<InfoTab> {
               ),
             ],
           ),
-          _row('Model', 'ZTE MF935 (MTN Broadband 4G MiFi)'),
-          _row('IMEI', '${_info['imei'] ?? ''}'),
-          _row('IMSI', '${_info['sim_imsi'] ?? ''}'),
-          _row('Hardware', '${_info['hardware_version'] ?? ''}'),
-          _row('Web UI', '${_info['wa_inner_version'] ?? ''}'),
-          _row('Firmware', '${_info['cr_version'] ?? ''}'),
-          _row('SSID', '${_info['SSID1'] ?? ''}'),
-          _row('LAN IP', '${_info['lan_ipaddr'] ?? ''}'),
-          _row('WAN IP', '${_info['wan_ipaddr'] ?? ''}'),
-          _row('Link', '${_info['ppp_status'] ?? ''}'),
-          _row('Network', '${_info['network_type'] ?? ''}'),
+          _row('Model', 'ZTE MF935 (MTN Broadband 4G MiFi)',
+              icon: Icons.memory_outlined),
+          _row('IMEI', '${_info['imei'] ?? ''}', icon: Icons.fingerprint),
+          _row('IMSI', '${_info['sim_imsi'] ?? ''}', icon: Icons.sim_card_outlined),
+          _row('Hardware', '${_info['hardware_version'] ?? ''}',
+              icon: Icons.developer_board_outlined),
+          _row('Web UI', '${_info['wa_inner_version'] ?? ''}',
+              icon: Icons.web_outlined),
+          _row('Firmware', '${_info['cr_version'] ?? ''}',
+              icon: Icons.cable_outlined),
+          _row('SSID', '${_info['SSID1'] ?? ''}', icon: Icons.wifi),
+          _row('LAN IP', '${_info['lan_ipaddr'] ?? ''}',
+              icon: Icons.router_outlined),
+          _row('WAN IP', '${_info['wan_ipaddr'] ?? ''}',
+              icon: Icons.public_outlined),
+          _row('Link', '${_info['ppp_status'] ?? ''}', icon: Icons.link),
+          _row('Network', '${_info['network_type'] ?? ''}',
+              icon: Icons.network_cell_outlined),
           _row('RSSI / RSRP',
-              '${_info['rssi'] ?? ''} / ${_info['lte_rsrp'] ?? ''} dBm'),
+              '${_info['rssi'] ?? ''} / ${_info['lte_rsrp'] ?? ''} dBm',
+              icon: Icons.signal_cellular_alt,
+              valueColor: bars >= 3 ? c.live : c.accentText),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
               children: [
-                const SizedBox(width: 150),
-                SignalBars(level: bars, height: 18),
+                SizedBox(width: 18, height: 18),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 120,
+                  child: Text('Signal',
+                      style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+                ),
+                SignalBars(level: bars, height: 16),
                 const SizedBox(width: 8),
                 Text(
                   quality,
@@ -230,7 +261,8 @@ class _InfoTabState extends State<InfoTab> {
               ],
             ),
           ),
-          _row('Max clients', '${_info['MAX_Access_num'] ?? ''}'),
+          _row('Max clients', '${_info['MAX_Access_num'] ?? ''}',
+              icon: Icons.language_outlined),
         ],
       ),
     );
@@ -245,6 +277,12 @@ class _InfoTabState extends State<InfoTab> {
             children: [
               const SectionLabel('Traffic statistics'),
               const Spacer(),
+              if (_updatedAt != null)
+                Text(
+                  'refreshed ${ZteClient.timeAgo(_updatedAt!)}',
+                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                ),
+              const SizedBox(width: 8),
               TextButton(
                   onPressed: _busy ? null : _resetCounter,
                   child: const Text('Reset counter')),
@@ -269,34 +307,48 @@ class _InfoTabState extends State<InfoTab> {
           const SizedBox(height: 8),
           _liveRow(c, 'Live down', ZteClient.formatRate(rrx)),
           _liveRow(c, 'Live up', ZteClient.formatRate(rtx)),
+          const SizedBox(height: 8),
+          _liveRow(c, 'Live total', ZteClient.formatRate(rrx + rtx)),
+          _liveRow(c, 'Daily average down',
+              "${(rxMb / (DateTime.now().day)).toStringAsFixed(1)} MB"),
         ],
       ),
     );
 
     // Two columns when the tab earns the width, stacked on narrow.
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: LayoutBuilder(
-        builder: (_, cons) {
-          if (cons.maxWidth <= 720) {
-            return Column(
+    // Stretch-to-bottom uses the ConstrainedBox(minHeight) + IntrinsicHeight
+    // pattern so both cards share equal height on desktop.
+    return LayoutBuilder(
+      builder: (_, cons) {
+        if (cons.maxWidth <= 720) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
               children: [
                 deviceCard,
                 const SizedBox(height: 10),
                 trafficCard,
               ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(flex: 11, child: deviceCard),
-              const SizedBox(width: 10),
-              Expanded(flex: 10, child: trafficCard),
-            ],
+            ),
           );
-        },
-      ),
+        }
+        return SingleChildScrollView(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: cons.maxHeight - 12),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 11, child: deviceCard),
+                  const SizedBox(width: 10),
+                  Expanded(flex: 10, child: trafficCard),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

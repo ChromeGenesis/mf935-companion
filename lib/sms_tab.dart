@@ -578,10 +578,11 @@ class _SmsTabState extends State<SmsTab> {
             decoration: const InputDecoration(
               labelText: 'Message',
               hintText: 'GSM-7 / Unicode auto-encoded',
+              alignLabelWithHint: true,
               isDense: true,
             ),
-            maxLines: 3,
-            minLines: 1,
+            maxLines: 6,
+            minLines: 3,
             onChanged: (_) => setState(() {}),
             onSubmitted: (_) => _send(),
           ),
@@ -608,31 +609,27 @@ class _SmsTabState extends State<SmsTab> {
     return GlassCard(
       padding: const EdgeInsets.all(14),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
           const SectionLabel('SMS center settings'),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 230),
-                child: SizedBox(
-                  width: 230,
-                  child: TextField(
-                    controller: _centerCtrl,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Center number',
-                      isDense: true,
-                    ),
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _centerCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Center number',
+                    isDense: true,
                   ),
                 ),
               ),
-              SizedBox(
-                width: 150,
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
                 child: DropdownButtonFormField<String>(
                   initialValue: _validity,
                   decoration: const InputDecoration(
@@ -651,19 +648,22 @@ class _SmsTabState extends State<SmsTab> {
                   onChanged: (v) => setState(() => _validity = v ?? _validity),
                 ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Switch(
-                    value: _report,
-                    activeThumbColor: c.accent,
-                    onChanged: (v) => setState(() => _report = v),
-                  ),
-                  Text(
-                    'Reports',
-                    style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-                  ),
-                ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Switch(
+                value: _report,
+                activeThumbColor: c.accent,
+                onChanged: (v) => setState(() => _report = v),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Send delivery reports',
+                  style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                ),
               ),
               ElevatedButton(
                 onPressed: _busy ? null : _saveSettings,
