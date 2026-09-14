@@ -4,8 +4,8 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:zte_mf935_app/main.dart';
-import 'package:zte_mf935_app/widgets.dart';
-import 'package:zte_mf935_app/zte_client.dart';
+import 'package:zte_mf935_app/core/widgets.dart';
+import 'package:zte_mf935_app/core/zte_client.dart';
 
 void main() {
   testWidgets('Dashboard renders login form', (WidgetTester tester) async {

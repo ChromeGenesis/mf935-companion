@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
-import 'widgets.dart';
-import 'zte_client.dart';
+import '../core/theme.dart';
+import '../core/widgets.dart';
+import '../core/zte_client.dart';
 
 /// One sender group in the inbox: tri-state header (counts, read-all,
 /// delete-all), capped message rows, swipe-to-delete.

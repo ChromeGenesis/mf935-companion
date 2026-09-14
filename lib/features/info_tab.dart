@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
-import 'widgets.dart';
-import 'zte_client.dart';
+import '../core/theme.dart';
+import '../core/widgets.dart';
+import '../core/zte_client.dart';
 
 /// Info tab: device information, traffic statistics + reset, data limit.
 class InfoTab extends StatefulWidget {

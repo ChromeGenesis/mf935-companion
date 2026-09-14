@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
+import '../core/theme.dart';
 
 /// Desktop rail: brand mark, view switcher, connection footer.
 /// Rhema operator-sidebar pattern (translucent surface, glow-pill active).

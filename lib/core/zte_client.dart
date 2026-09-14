@@ -2,178 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
-import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
-/// Outcome of a LOGIN attempt, with the router's raw reply attached so the
-/// UI can show exactly what the device said (wrong password vs unreachable
-/// vs unexpected firmware response).
-class LoginResult {
-  final bool success;
-  final String message;
-  final String raw;
+import 'models.dart';
+import 'zte_utils.dart' as zu;
 
-  const LoginResult(this.success, this.message, [this.raw = '']);
-
-  @override
-  String toString() => 'LoginResult($success, $message, $raw)';
-}
-
-/// Outcome of a USSD transaction: [text] is the decoded reply, [action]
-// "1" means the network waits for a reply (interactive menu).
-class UssdResult {
-  final bool success;
-  final String text;
-  final String action;
-  final String flag;
-  final String error;
-
-  const UssdResult(this.success, this.text, this.action, this.flag, this.error);
-
-  bool get needsReply => success && action == '1';
-}
-
-/// One SMS from the modem store. [content] is decoded to readable text.
-class SmsMessage {
-  final String id;
-  final String number;
-  final String content;
-  final String tag;
-  final String date;
-  final String draftGroupId;
-
-  const SmsMessage({
-    required this.id,
-    required this.number,
-    required this.content,
-    required this.tag,
-    required this.date,
-    required this.draftGroupId,
-  });
-
-  bool get isNew => tag == '1';
-
-  /// "26,09,13,14,44,04,+4" -> "26/09/13 14:44:04".
-  String get displayDate {
-    final parts = date.split(',');
-    if (parts.length < 6) return date;
-    return '${parts[0]}/${parts[1]}/${parts[2]} '
-        '${parts[3].padLeft(2, '0')}:${parts[4].padLeft(2, '0')}:${parts[5].padLeft(2, '0')}';
-  }
-}
-
-/// Group messages by sender, first-seen order preserved. Single grouping
-/// path for inbox + tests (SSOT).
-List<MapEntry<String, List<SmsMessage>>> groupSmsBySender(
-  List<SmsMessage> msgs,
-) {
-  final groups = <String, List<SmsMessage>>{};
-  for (final m in msgs) {
-    groups.putIfAbsent(m.number, () => []).add(m);
-  }
-  return groups.entries.toList();
-}
-
-/// One attached station from station_list.
-class AttachedDevice {
-  final String mac;
-  final String hostname;
-  final String ip;
-
-  /// When the station joined the WiFi (firmware `ctime` seconds). Null
-  /// when the modem doesn't report it — displayed only when present.
-  final DateTime? connectedAt;
-
-  const AttachedDevice({
-    required this.mac,
-    required this.hostname,
-    required this.ip,
-    this.connectedAt,
-  });
-}
-
-/// One carrier data bundle. [expiry] is best-effort: when the reply
-/// names no date, the first date seen anywhere in the reply is attached
-/// (balance texts only ever mention expiry dates) — still inspectable
-/// via the raw reply shown under the card.
-class DataBundle {
-  final String name;
-  final double mb;
-  final DateTime? expiry;
-
-  const DataBundle({required this.name, required this.mb, this.expiry});
-
-  /// Out of quota: unexpired but empty. Shown dimmed + last, never
-  /// drives the countdown or alerts.
-  bool get exhausted => mb <= 0;
-
-  /// Days until expiry (negative = expired). Null when unknown.
-  int? get daysLeft => expiry?.difference(DateTime.now()).inDays;
-
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'mb': mb,
-    'expiry': expiry?.toIso8601String(),
-  };
-
-  factory DataBundle.fromJson(Map<String, dynamic> j) => DataBundle(
-    name: '${j['name'] ?? ''}',
-    mb: (j['mb'] as num?)?.toDouble() ?? 0,
-    expiry: j['expiry'] == null ? null : DateTime.tryParse('${j['expiry']}'),
-  );
-}
-
-/// Persisted data-balance snapshot: survives SMS deletion, app restarts,
-/// anything. Refreshed by dialing *323*1# (see [ZteClient.fetchDataBalance]).
-class DataBalance {
-  final List<DataBundle> bundles;
-  final String raw;
-  final DateTime fetchedAt;
-
-  const DataBalance({
-    required this.bundles,
-    required this.raw,
-    required this.fetchedAt,
-  });
-
-  double get totalMb => bundles.fold(0, (a, b) => a + b.mb);
-
-  /// Soonest-dated LIVE bundle still in the future (the one that
-  /// matters). Exhausted bundles never qualify, even unexpired.
-  DataBundle? get nextExpiry {
-    final live = bundles.where((b) => !b.exhausted && b.expiry != null).toList()
-      ..sort((a, b) => a.expiry!.compareTo(b.expiry!));
-    if (live.isEmpty) return null;
-    final now = DateTime.now();
-    return live.firstWhere(
-      (b) => b.expiry!.isAfter(now),
-      orElse: () => live.last,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-    'bundles': bundles.map((b) => b.toJson()).toList(),
-    'raw': raw,
-    'fetchedAt': fetchedAt.toIso8601String(),
-  };
-
-  factory DataBalance.fromJson(Map<String, dynamic> j) {
-    final raw = j['bundles'];
-    return DataBalance(
-      bundles: raw is List
-          ? raw
-                .whereType<Map>()
-                .map((e) => DataBundle.fromJson(Map<String, dynamic>.from(e)))
-                .toList()
-          : [],
-      raw: '${j['raw'] ?? ''}',
-      fetchedAt:
-          DateTime.tryParse('${j['fetchedAt']}') ??
-          DateTime.fromMillisecondsSinceEpoch(0),
-    );
-  }
-}
+// Compatibility: models + pure helpers moved to dedicated modules, but
+// every existing `import 'zte_client.dart'` keeps seeing them (SSOT).
+export 'models.dart';
+export 'zte_utils.dart';
 
 /// Thin client for the ZTE MF935 localhost web UI (default 192.168.0.1).
 ///
@@ -574,216 +412,48 @@ class ZteClient {
     return const UssdResult(false, '', '', '', 'Timed out waiting for reply.');
   }
 
-  /// Human label for a terminal ussd_write_flag value (stock service.js).
-  static String ussdFlagLabel(String flag) {
-    switch (flag) {
-      case '1':
-        return 'No service (ussd_no_service).';
-      case '2':
-        return 'Network terminated the session.';
-      case '3':
-      case '4':
-        return 'USSD timed out — try again.';
-      case '10':
-        return 'USSD retry — try again.';
-      case '41':
-        return 'Operation not supported.';
-      case '99':
-        return 'USSD not supported on this network.';
-      default:
-        return 'USSD failed (flag=$flag).';
-    }
-  }
+  // ── Pure helpers (SSOT in zte_utils.dart) ─────────────────────────
+  // Thin static forwarders: identical signatures, zero behavior change.
+  // Existing `ZteClient.xxx(...)` call sites and tests keep working.
 
-  /// Nested hash from the ZTE web UI (service.js login() + util.js
-  /// `paswordAlgorithmsCookie`, verified against the live firmware):
-  /// `SHA256( UPPER(SHA256(password)) + LD )`, UPPERCASE hex throughout —
-  /// the JS SHA256 stringifier uses the upper lookup table (`r=1`).
-  /// Proven with a live `{"result":"0"}` on this exact device.
-  static String generateAuthHash(String password, String ld) {
-    final first = sha256
-        .convert(utf8.encode(password))
-        .toString()
-        .toUpperCase();
-    return sha256.convert(utf8.encode(first + ld)).toString().toUpperCase();
-  }
+  /// Human label for a terminal ussd_write_flag value (stock service.js).
+  static String ussdFlagLabel(String flag) => zu.ussdFlagLabel(flag);
+
+  /// Nested hash from the ZTE web UI (see [zu.generateAuthHash]).
+  static String generateAuthHash(String password, String ld) =>
+      zu.generateAuthHash(password, ld);
 
   /// Map a numeric PLMN (MCCMNC, e.g. "62120") to a carrier name.
   /// Non-numeric provider strings pass through untouched.
-  static String carrierName(String provider) {
-    const carriers = {
-      '62120': 'Airtel NG',
-      '62130': 'MTN NG',
-      '62150': 'Glo NG',
-      '62160': '9mobile NG',
-    };
-    final name = carriers[provider.trim()];
-    if (name != null) return name;
-    if (RegExp(r'^\d{5,6}$').hasMatch(provider.trim())) {
-      return 'PLMN ${provider.trim()}';
-    }
-    return provider;
-  }
+  static String carrierName(String provider) => zu.carrierName(provider);
 
   /// Normalize a USSD code: strip spaces, ensure it starts with '*'
   /// and ends with '#'. Every network USSD code has that shape.
-  static String normalizeUssd(String raw) {
-    var s = raw.trim().replaceAll(RegExp(r'\s+'), '');
-    if (!s.startsWith('*')) s = '*$s';
-    if (!s.endsWith('#')) s = '$s#';
-    return s;
-  }
+  static String normalizeUssd(String raw) => zu.normalizeUssd(raw);
 
   /// Plausible USSD: *...# with at least one digit, digits/* only inside.
-  static bool isValidUssd(String code) =>
-      RegExp(r'^\*[0-9*]+#$').hasMatch(code.trim());
+  static bool isValidUssd(String code) => zu.isValidUssd(code);
 
-  /// Priority layers (never blank — quota is guaranteed):
-  /// 1. Structured bundles: `Name: 2.5GB till/expires <date>`.
-  /// 2. No structure? Sum every `<amount> UNIT` in the reply as "Data
-  ///    left" (balance texts list remaining quotas, not usage).
-  /// 3. No amounts at all? Empty bundles — the card then shows the raw
-  ///    reply so the user still sees the answer.
-  /// Expiry attaches per-bundle when named, else the first date found
-  /// anywhere in the reply (best-effort, always verifiable in raw).
-  static DataBalance resolveDataBalance(String raw, DateTime fetchedAt) {
-    final structured = _sortBundles(parseDataBundles(raw));
-    if (structured.isNotEmpty) {
-      final looseDate = structured.any((b) => b.expiry != null)
-          ? null
-          : scanModemDate(raw);
-      final bundles = looseDate == null
-          ? structured
-          : structured
-                .map(
-                  (b) => b.expiry != null
-                      ? b
-                      : DataBundle(name: b.name, mb: b.mb, expiry: looseDate),
-                )
-                .toList();
-      return DataBalance(bundles: bundles, raw: raw, fetchedAt: fetchedAt);
-    }
-    final amounts = extractDataAmounts(raw);
-    if (amounts.isNotEmpty) {
-      return DataBalance(
-        bundles: _sortBundles([
-          DataBundle(
-            name: 'Data left',
-            mb: amounts.fold(0.0, (a, b) => a + b),
-            expiry: scanModemDate(raw),
-          ),
-        ]),
-        raw: raw,
-        fetchedAt: fetchedAt,
-      );
-    }
-    return DataBalance(bundles: const [], raw: raw, fetchedAt: fetchedAt);
-  }
-
-  /// Display order: live bundles by soonest expiry first, dateless live
-  /// next, exhausted last. Deterministic everywhere (SSOT).
-  static List<DataBundle> _sortBundles(List<DataBundle> bundles) {
-    int rank(DataBundle b) {
-      if (b.exhausted) return 2;
-      if (b.expiry == null) return 1;
-      return 0;
-    }
-
-    bundles.sort((a, b) {
-      final r = rank(a).compareTo(rank(b));
-      if (r != 0) return r;
-      if (a.expiry != null && b.expiry != null) {
-        return a.expiry!.compareTo(b.expiry!);
-      }
-      return b.mb.compareTo(a.mb);
-    });
-    return bundles;
-  }
+  /// Priority layers (never blank — quota is guaranteed). See
+  /// [zu.resolveDataBalance] for the full contract.
+  static DataBalance resolveDataBalance(String raw, DateTime fetchedAt) =>
+      zu.resolveDataBalance(raw, fetchedAt);
 
   /// Plan window in days inferred from the bundle name. Drives the header
   /// fuse ring only — never displayed as fact, the exact countdown is.
-  static int expiryWindowDays(String name) {
-    final n = name.toLowerCase();
-    if (n.contains('daily')) return 1;
-    if (n.contains('weekly')) return 7;
-    if (n.contains('monthly')) return 30;
-    if (n.contains('yearly') || n.contains('annual')) return 365;
-    return 30;
-  }
+  static int expiryWindowDays(String name) => zu.expiryWindowDays(name);
 
   /// Every `<amount> KB|MB|GB` in free text, converted to MB.
-  static List<double> extractDataAmounts(String text) {
-    final re = RegExp(r'([\d.]+)\s*(KB|MB|GB)\b', caseSensitive: false);
-    return re.allMatches(text).map((m) {
-      final amount = double.tryParse(m.group(1) ?? '') ?? 0;
-      switch ((m.group(2) ?? 'MB').toUpperCase()) {
-        case 'GB':
-          return amount * 1024;
-        case 'KB':
-          return amount / 1024;
-        default:
-          return amount;
-      }
-    }).toList();
-  }
+  static List<double> extractDataAmounts(String text) =>
+      zu.extractDataAmounts(text);
 
   /// First modem date ("dd-MM-yyyy [HH:mm:ss]" or slashes) in free text.
-  static DateTime? scanModemDate(String text) {
-    final re = RegExp(r'(\d{2}[-/]\d{2}[-/]\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)');
-    final m = re.firstMatch(text);
-    return m == null ? null : _parseModemDate(m.group(1));
-  }
+  static DateTime? scanModemDate(String text) => zu.scanModemDate(text);
 
-  /// Parse a balance reply into bundles. Handles both carrier shapes:
-  /// - Airtel: "Weekly Bundle: 29990.35MB till 28-09-2026 02:09:12"
-  /// - MTN:    "Daily: 20.59MB @N1.0/MB expires 14/09/2026"
-  /// Menu prompts without an amount ("YouTube Night:*n Next",
-  /// "InstaTop: NO.", point balances without units) are skipped.
-  static List<DataBundle> parseDataBundles(String text) {
-    final out = <DataBundle>[];
-    // Alternation (skip-till-date | nothing): a bare optional group would
-    // let the lazy skip match empty and succeed without the date, so the
-    // date branch is attempted FIRST and must match whole or fail.
-    final re = RegExp(
-      r'([^:*#,\n]+?)\s*:\s*([\d.]+)\s*(KB|MB|GB)\b(?:[^\n,]*?(?:till|expires?)\s*(\d{2}[-/]\d{2}[-/]\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)|)',
-      caseSensitive: false,
-    );
-    for (final m in re.allMatches(text)) {
-      final amount = double.tryParse(m.group(2) ?? '') ?? 0;
-      final unit = (m.group(3) ?? 'MB').toUpperCase();
-      final mb = unit == 'GB'
-          ? amount * 1024
-          : unit == 'KB'
-          ? amount / 1024
-          : amount;
-      out.add(
-        DataBundle(
-          name: (m.group(1) ?? '').trim(),
-          mb: mb,
-          expiry: _parseModemDate(m.group(4)),
-        ),
-      );
-    }
-    return out;
-  }
-
-  /// "28-09-2026 02:09:12" / "14/09/2026" -> DateTime (local, midnight
-  /// when no time given). Null when unparseable.
-  static DateTime? _parseModemDate(String? s) {
-    if (s == null) return null;
-    final m = RegExp(
-      r'(\d{2})[-/](\d{2})[-/](\d{4})(?:\s+(\d{2}):(\d{2}):(\d{2}))?',
-    ).firstMatch(s.trim());
-    if (m == null) return null;
-    return DateTime(
-      int.parse(m.group(3)!),
-      int.parse(m.group(2)!),
-      int.parse(m.group(1)!),
-      m.group(4) == null ? 0 : int.parse(m.group(4)!),
-      m.group(5) == null ? 0 : int.parse(m.group(5)!),
-      m.group(6) == null ? 0 : int.parse(m.group(6)!),
-    );
-  }
+  /// Parse a balance reply into bundles (Airtel + MTN shapes).
+  /// Menu prompts without an amount are skipped.
+  static List<DataBundle> parseDataBundles(String text) =>
+      zu.parseDataBundles(text);
 
   /// Dial *323*1#, follow "Next" pages (reply "n", up to [maxPages]),
   /// return the parsed snapshot. Throws on modem failure.
@@ -810,267 +480,39 @@ class ZteClient {
   }
 
   /// "5m ago", "2h ago", "3d ago" for snapshot freshness labels.
-  static String timeAgo(DateTime t) {
-    final d = DateTime.now().difference(t);
-    if (d.inMinutes < 1) return 'just now';
-    if (d.inHours < 1) return '${d.inMinutes}m ago';
-    if (d.inDays < 1) return '${d.inHours}h ago';
-    return '${d.inDays}d ago';
-  }
+  static String timeAgo(DateTime t) => zu.timeAgo(t);
 
   /// Human data volume: "812 MB" under 1 GB, "92.4 GB" above.
-  static String formatDataVolume(double mb) {
-    if (mb >= 1024) return '${(mb / 1024).toStringAsFixed(1)} GB';
-    return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
-  }
+  static String formatDataVolume(double mb) => zu.formatDataVolume(mb);
 
   /// Raw byte counter -> MB.
-  static double bytesToMb(dynamic v) =>
-      (double.tryParse('$v') ?? 0) / (1024 * 1024);
+  static double bytesToMb(dynamic v) => zu.bytesToMb(v);
 
   /// Bytes/sec -> "850 B/s", "1.2 KB/s", "3.4 MB/s".
-  static String formatRate(double bps) {
-    if (bps >= 1024 * 1024) {
-      return '${(bps / 1024 / 1024).toStringAsFixed(1)} MB/s';
-    }
-    if (bps >= 1024) return '${(bps / 1024).toStringAsFixed(0)} KB/s';
-    return '${bps.toStringAsFixed(0)} B/s';
-  }
+  static String formatRate(double bps) => zu.formatRate(bps);
 
   /// Seconds online -> "45m", "37h", "2d 4h".
-  static String formatOnlineTime(dynamic seconds) {
-    final s = (double.tryParse('$seconds') ?? 0).toInt();
-    if (s < 3600) return '${s ~/ 60}m';
-    if (s < 86400) return '${s ~/ 3600}h';
-    return '${s ~/ 86400}d ${s % 86400 ~/ 3600}h';
-  }
+  static String formatOnlineTime(dynamic seconds) =>
+      zu.formatOnlineTime(seconds);
 
-  // ── SMS text codecs (ports of stock util.js) ──────────────────────
-  // The modem stores message bodies as upper-hex UCS2-ish: BMP chars are
-  // 4-digit zero-padded, astral chars are unpadded codepoints. escapeMessage
-  // is a no-op in stock, so encode = hex only.
+  // ── SMS text codecs (SSOT in zte_utils.dart) ──────────────────────
 
   /// 'Hello' -> '00480065006C006C006F'.
-  static String encodeSmsBody(String text) {
-    final buf = StringBuffer();
-    for (var i = 0; i < text.length; i++) {
-      final c = text.codeUnitAt(i);
-      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < text.length) {
-        final lo = text.codeUnitAt(i + 1);
-        if (lo >= 0xDC00 && lo <= 0xDFFF) {
-          final cp = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
-          buf.write(cp.toRadixString(16).toUpperCase());
-          i++;
-          continue;
-        }
-      }
-      buf.write(c.toRadixString(16).toUpperCase().padLeft(4, '0'));
-    }
-    return buf.toString();
-  }
+  static String encodeSmsBody(String text) => zu.encodeSmsBody(text);
 
   /// Upper-hex body -> readable text (strips 0009/0000 + BOM like stock).
-  static String decodeUcs2Hex(String hex) {
-    if (hex.isEmpty) return '';
-    final clean = hex.replaceAll('0009', '').replaceAll('0000', '');
-    final buf = StringBuffer();
-    for (var i = 0; i + 4 <= clean.length; i += 4) {
-      final g = int.tryParse(clean.substring(i, i + 4), radix: 16);
-      if (g == null) continue;
-      if (g <= 0xFFFF) {
-        buf.writeCharCode(g);
-      } else {
-        final v = g - 0x10000;
-        buf.writeCharCode(0xD800 | (v >> 10));
-        buf.writeCharCode(0xDC00 | (v & 0x3FF));
-      }
-    }
-    final out = buf.toString();
-    return out.startsWith('\uFEFF') ? out.substring(1) : out;
-  }
-
-  static const _gsm7 = {
-    '000A',
-    '000C',
-    '000D',
-    '0020',
-    '0021',
-    '0022',
-    '0023',
-    '0024',
-    '0025',
-    '0026',
-    '0027',
-    '0028',
-    '0029',
-    '002A',
-    '002B',
-    '002C',
-    '002D',
-    '002E',
-    '002F',
-    '0030',
-    '0031',
-    '0032',
-    '0033',
-    '0034',
-    '0035',
-    '0036',
-    '0037',
-    '0038',
-    '0039',
-    '003A',
-    '003B',
-    '003C',
-    '003D',
-    '003E',
-    '003F',
-    '0040',
-    '0041',
-    '0042',
-    '0043',
-    '0044',
-    '0045',
-    '0046',
-    '0047',
-    '0048',
-    '0049',
-    '004A',
-    '004B',
-    '004C',
-    '004D',
-    '004E',
-    '004F',
-    '0050',
-    '0051',
-    '0052',
-    '0053',
-    '0054',
-    '0055',
-    '0056',
-    '0057',
-    '0058',
-    '0059',
-    '005A',
-    '005B',
-    '005C',
-    '005D',
-    '005E',
-    '005F',
-    '0061',
-    '0062',
-    '0063',
-    '0064',
-    '0065',
-    '0066',
-    '0067',
-    '0068',
-    '0069',
-    '006A',
-    '006B',
-    '006C',
-    '006D',
-    '006E',
-    '006F',
-    '0070',
-    '0071',
-    '0072',
-    '0073',
-    '0074',
-    '0075',
-    '0076',
-    '0077',
-    '0078',
-    '0079',
-    '007A',
-    '007B',
-    '007C',
-    '007D',
-    '007E',
-    '00A0',
-    '00A1',
-    '00A3',
-    '00A4',
-    '00A5',
-    '00A7',
-    '00BF',
-    '00C4',
-    '00C5',
-    '00C6',
-    '00C7',
-    '00C9',
-    '00D1',
-    '00D6',
-    '00D8',
-    '00DC',
-    '00DF',
-    '00E0',
-    '00E4',
-    '00E5',
-    '00E6',
-    '00E8',
-    '00E9',
-    '00EC',
-    '00F1',
-    '00F2',
-    '00F6',
-    '00F8',
-    '00F9',
-    '00FC',
-    '0393',
-    '0394',
-    '0398',
-    '039B',
-    '039E',
-    '03A0',
-    '03A3',
-    '03A6',
-    '03A8',
-    '03A9',
-    '20AC',
-  };
+  static String decodeUcs2Hex(String hex) => zu.decodeUcs2Hex(hex);
 
   /// 'GSM7_default' when every char is in the GSM7 table, else 'UNICODE'.
-  static String smsEncodeType(String text) {
-    for (var i = 0; i < text.length; i++) {
-      final h = text
-          .codeUnitAt(i)
-          .toRadixString(16)
-          .toUpperCase()
-          .padLeft(4, '0');
-      if (!_gsm7.contains(h)) return 'UNICODE';
-    }
-    return 'GSM7_default';
-  }
+  static String smsEncodeType(String text) => zu.smsEncodeType(text);
 
   /// Stock getCurrentTimeString: "YY;MM;DD;HH;MM;SS;TZ" e.g. "26;09;13;14;05;33;+1".
-  static String smsTimeString([DateTime? now]) {
-    final t = now ?? DateTime.now();
-    String two(int v) => v < 10 ? '0$v' : '$v';
-    // Mirror JS getTimezoneOffset(): minutes to ADD to local to get UTC.
-    final jsOffset = -t.timeZoneOffset.inMinutes;
-    final tzHours = -jsOffset / 60;
-    final tzBody = tzHours % 1 == 0 ? tzHours.toStringAsFixed(0) : '$tzHours';
-    final tz = '${jsOffset < 0 ? '+' : ''}$tzBody';
-    return '${'${t.year}'.substring(2)};${two(t.month)};${two(t.day)};'
-        '${two(t.hour)};${two(t.minute)};${two(t.second)};$tz';
-  }
+  static String smsTimeString([DateTime? now]) => zu.smsTimeString(now);
 
   /// Parse a data-balance reply like "2.3GB remaining" / "450MB left".
   /// Returns MB, or null when no match. Adjust the regex per carrier.
-  static double? parseDataBalanceMb(String ussdText) {
-    final gb = RegExp(
-      r'(\d+(?:\.\d+)?)\s*GB',
-      caseSensitive: false,
-    ).firstMatch(ussdText);
-    if (gb != null) return double.parse(gb.group(1)!) * 1024;
-    final mb = RegExp(
-      r'(\d+(?:\.\d+)?)\s*MB',
-      caseSensitive: false,
-    ).firstMatch(ussdText);
-    if (mb != null) return double.parse(mb.group(1)!);
-    return null;
-  }
+  static double? parseDataBalanceMb(String ussdText) =>
+      zu.parseDataBalanceMb(ussdText);
 
   /// Send an SMS. Wire shape from stock service.js (NOT the old
   /// sms_param/sms_text guess — that was never real): Number +
