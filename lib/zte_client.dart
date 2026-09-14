@@ -695,6 +695,17 @@ class ZteClient {
     return bundles;
   }
 
+  /// Plan window in days inferred from the bundle name. Drives the header
+  /// fuse ring only — never displayed as fact, the exact countdown is.
+  static int expiryWindowDays(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('daily')) return 1;
+    if (n.contains('weekly')) return 7;
+    if (n.contains('monthly')) return 30;
+    if (n.contains('yearly') || n.contains('annual')) return 365;
+    return 30;
+  }
+
   /// Every `<amount> KB|MB|GB` in free text, converted to MB.
   static List<double> extractDataAmounts(String text) {
     final re = RegExp(r'([\d.]+)\s*(KB|MB|GB)\b', caseSensitive: false);

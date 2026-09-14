@@ -21,9 +21,13 @@ class StatusTab extends StatefulWidget {
   final Future<void> Function(String title, String body) notify;
   final Future<void> Function() onRefreshNow;
 
-  /// Published snapshot feed: main's global countdown strip listens to
+  /// Published snapshot feed: main's header fuse ring listens to
   /// this, so the countdown lives app-wide, not in the hero card.
   final ValueNotifier<DataBalance?> balanceFeed;
+
+  /// Jump to another tab (SMS unread → inbox, devices → Device).
+  /// Null-safe: tiles stay static when the shell doesn't provide it.
+  final void Function(int tab)? onJumpTab;
 
   const StatusTab({
     super.key,
@@ -34,6 +38,7 @@ class StatusTab extends StatefulWidget {
     required this.notify,
     required this.onRefreshNow,
     required this.balanceFeed,
+    this.onJumpTab,
   });
 
   @override
@@ -176,6 +181,12 @@ class _StatusTabState extends State<StatusTab> {
   /// when embedded side-by-side (the gap already separates).
   Widget _balanceSection(ZteColors c, {bool divider = true}) {
     final b = _balance;
+    // Biggest bundle: quota bars are relative shares of this. The modem
+    // never reports plan totals, so absolute % would be a guess.
+    final maxMb = (b?.bundles ?? const <DataBundle>[]).fold<double>(
+      0,
+      (m, x) => x.mb > m ? x.mb : m,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -256,40 +267,61 @@ class _StatusTabState extends State<StatusTab> {
                 : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
-          // Live countdown moved global (main's strip under the header).
-          // Hero keeps total + bundles + raw only.
+          // Hero keeps total + bundles + raw only; the live countdown
+          // is the header fuse ring (main reads balanceFeed).
           for (final bundle in b.bundles)
             Opacity(
               // Exhausted bundles take less precedence: dimmed, last.
               opacity: bundle.exhausted ? 0.45 : 1,
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Text(
-                        bundle.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: c.textSecondary,
-                          fontSize: 12.5,
-                          decoration: bundle.exhausted
-                              ? TextDecoration.lineThrough
-                              : null,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            bundle.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: c.textSecondary,
+                              fontSize: 12.5,
+                              decoration: bundle.exhausted
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          ZteClient.formatDataVolume(bundle.mb),
+                          style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _expiryChip(c, bundle),
+                      ],
+                    ),
+                    if (!bundle.exhausted && maxMb > 0) ...[
+                      const SizedBox(height: 4),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(99),
+                        child: Container(
+                          height: 3,
+                          color: c.textMuted.withAlpha(45),
+                          child: FractionallySizedBox(
+                            alignment: Alignment.centerLeft,
+                            widthFactor: (bundle.mb / maxMb).clamp(0.02, 1.0),
+                            child: Container(color: c.accentText),
+                          ),
                         ),
                       ),
-                    ),
-                    Text(
-                      ZteClient.formatDataVolume(bundle.mb),
-                      style: TextStyle(
-                        color: c.textPrimary,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _expiryChip(c, bundle),
+                    ],
                   ],
                 ),
               ),
@@ -548,6 +580,9 @@ class _StatusTabState extends State<StatusTab> {
                         _tileText(s['sms_unread_num']) != 'n/a'
                     ? c.accentText
                     : null,
+                onTap: widget.onJumpTab == null
+                    ? null
+                    : () => widget.onJumpTab!(1),
               ),
               StatTile(
                 icon: Icons.schedule_outlined,
@@ -564,6 +599,9 @@ class _StatusTabState extends State<StatusTab> {
                     ? (widget.connected ? '…' : '—')
                     : '$_deviceCount',
                 caption: 'devices',
+                onTap: widget.onJumpTab == null
+                    ? null
+                    : () => widget.onJumpTab!(4),
               ),
             ],
           ),

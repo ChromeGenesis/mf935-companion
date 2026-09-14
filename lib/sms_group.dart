@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
+import 'widgets.dart';
 import 'zte_client.dart';
 
 /// One sender group in the inbox: tri-state header (counts, read-all,
@@ -78,12 +79,10 @@ class SenderGroup extends StatelessWidget {
                 SizedBox(
                   width: 28,
                   height: 28,
-                  child: Checkbox(
+                  child: ZCheck(
                     // Tri-state: all / some / none.
                     value: allPicked ? true : (picked > 0 ? null : false),
                     tristate: true,
-                    visualDensity: VisualDensity.compact,
-                    fillColor: WidgetStatePropertyAll(c.accent),
                     onChanged: (_) => onToggleGroupPick(),
                   ),
                 ),
@@ -175,11 +174,8 @@ class SenderGroup extends StatelessWidget {
                         child: SizedBox(
                           width: 24,
                           height: 24,
-                          child: Checkbox(
+                          child: ZCheck(
                             value: pickedRow,
-                            visualDensity: VisualDensity.compact,
-                            fillColor:
-                                WidgetStatePropertyAll(c.accent),
                             onChanged: (_) => onToggleSelect(m.id),
                           ),
                         ),

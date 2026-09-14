@@ -3,6 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
+import 'zte_client.dart';
+
+/// App checkbox: transparent with a hairline border when off, amber when
+/// on. The raw Material Checkbox keeps its fill in every state — amber
+/// box + glow even unticked — so every checkbox goes through this.
 
 /// Ambient background: near-black + amber orb top-left + indigo orb
 /// bottom-right. Cheap radial gradients, zero BackdropFilter cost.
@@ -166,11 +171,13 @@ class StatusPill extends StatelessWidget {
 
 /// Single stat tile: icon left, big value + caption right. Compact enough
 /// for a 2x2 grid inside a fixed-height dashboard (no page scroll).
+/// [onTap] makes it a jump link (SMS unread → inbox, devices → Device).
 class StatTile extends StatelessWidget {
   final IconData icon;
   final String value;
   final String caption;
   final Color? valueColor;
+  final VoidCallback? onTap;
 
   const StatTile({
     super.key,
@@ -178,43 +185,53 @@ class StatTile extends StatelessWidget {
     required this.value,
     required this.caption,
     this.valueColor,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final c = context.zc;
+    final body = Row(
+      children: [
+        Icon(icon, size: 17, color: c.textMuted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: valueColor ?? c.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Text(
+                caption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+            ],
+          ),
+        ),
+        if (onTap != null)
+          Icon(Icons.chevron_right, size: 16, color: c.textMuted),
+      ],
+    );
     return GlassCard(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-      child: Row(
-        children: [
-          Icon(icon, size: 17, color: c.textMuted),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: valueColor ?? c.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  caption,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
-                ),
-              ],
+      child: onTap == null
+          ? body
+          : InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: body,
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -757,6 +774,182 @@ class _CountdownTextState extends State<CountdownText> {
                     fontWeight: FontWeight.w800,
                   ))
               .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+    );
+  }
+}
+
+/// App checkbox: transparent with a hairline border when off, amber fill
+/// + black tick when on. The only checkbox shape in this app.
+class ZCheck extends StatelessWidget {
+  final bool? value;
+  final bool tristate;
+  final ValueChanged<bool?>? onChanged;
+
+  const ZCheck({
+    super.key,
+    required this.value,
+    this.tristate = false,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Checkbox(
+        value: value,
+        tristate: tristate,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+        side: BorderSide(color: c.textMuted.withAlpha(150), width: 1.5),
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return c.accent;
+          return Colors.transparent;
+        }),
+        checkColor: Colors.black,
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+        splashRadius: 14,
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+/// Fuse ring: radial countdown for the next-expiring bundle, living in
+/// the app header at title level. The ring burns down over the plan
+/// window inferred from the bundle name (daily/weekly/monthly); the
+/// exact numbers ride in the text + tooltip. Tap jumps to Status.
+/// Self-ticking — rebuilds only itself, once a second.
+class ExpiryDial extends StatefulWidget {
+  final DataBundle bundle;
+  final bool compact; // narrow screens: ring + time, no name
+  final VoidCallback? onTap;
+
+  const ExpiryDial({
+    super.key,
+    required this.bundle,
+    this.compact = false,
+    this.onTap,
+  });
+
+  @override
+  State<ExpiryDial> createState() => _ExpiryDialState();
+}
+
+class _ExpiryDialState extends State<ExpiryDial> {
+  Timer? _timer;
+  late Duration _left;
+
+  Duration _remaining() {
+    final exp = widget.bundle.expiry;
+    if (exp == null) return Duration.zero;
+    return exp.difference(DateTime.now());
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _left = _remaining();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _left = _remaining());
+    });
+  }
+
+  @override
+  void didUpdateWidget(ExpiryDial old) {
+    super.didUpdateWidget(old);
+    if (old.bundle.expiry != widget.bundle.expiry) {
+      _left = _remaining();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    final b = widget.bundle;
+    final windowSecs = ZteClient.expiryWindowDays(b.name) * 86400;
+    final frac = windowSecs <= 0
+        ? 0.0
+        : (_left.inSeconds / windowSecs).clamp(0.0, 1.0);
+    final urgent = _left.inHours <= 48;
+    final ring = urgent ? c.danger : c.accentText;
+    return Tooltip(
+      message:
+          '${b.name} · ${ZteClient.formatDataVolume(b.mb)} left · ends ${formatCountdown(_left)}',
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(99),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: c.surface.withAlpha(170),
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(color: ring.withAlpha(70)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 26,
+                height: 26,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(
+                        value: frac,
+                        strokeWidth: 3,
+                        backgroundColor: c.textMuted.withAlpha(50),
+                        valueColor: AlwaysStoppedAnimation(ring),
+                        strokeCap: StrokeCap.round,
+                      ),
+                    ),
+                    Icon(Icons.hourglass_bottom, size: 11, color: ring),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!widget.compact)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 110),
+                      child: Text(
+                        b.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                      ),
+                    ),
+                  Text(
+                    formatCountdown(_left),
+                    style: TextStyle(
+                      color: ring,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

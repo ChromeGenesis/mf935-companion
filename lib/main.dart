@@ -92,7 +92,7 @@ class _DashboardPageState extends State<DashboardPage>
   bool _busy = false;
   int _tab = 0;
   bool _narrow = false; // <640px: bottom nav; otherwise sidebar
-  // Published balance feed (StatusTab writes, global strip reads).
+  // Published balance feed (StatusTab writes, header fuse ring reads).
   final ValueNotifier<DataBalance?> _balanceFeed = ValueNotifier<DataBalance?>(
     null,
   );
@@ -321,48 +321,24 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// Global countdown strip: the "when does my data die" answer, visible
-  /// on every tab. Tapping jumps to Status. Hidden when nothing to show.
-  Widget _balanceStrip() {
+  /// Header fuse ring: the "when does my data die" answer at title
+  /// level, visible on every tab. Tapping jumps to Status. Renders
+  /// nothing when there is no live bundle to count down to.
+  Widget _expiryDial() {
     return ValueListenableBuilder<DataBalance?>(
       valueListenable: _balanceFeed,
-      builder: (ctx, b, _) {
+      builder: (_, b, _) {
         final next = b?.nextExpiry;
-        if (!_connected ||
-            next == null ||
-            next.expiry == null ||
-            !next.expiry!.isAfter(DateTime.now())) {
+        final exp = next?.expiry;
+        if (!_connected || exp == null || !exp.isAfter(DateTime.now())) {
           return const SizedBox.shrink();
         }
-        final c = ctx.zc;
         return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: InkWell(
+          padding: const EdgeInsets.only(right: 8),
+          child: ExpiryDial(
+            bundle: next!,
+            compact: _narrow,
             onTap: () => setState(() => _tab = 0),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: c.accent.withAlpha(22),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: c.accent.withAlpha(90)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.hourglass_bottom, size: 14, color: c.accentText),
-                  const SizedBox(width: 7),
-                  Flexible(
-                    child: Text(
-                      '${next.name} · ${ZteClient.formatDataVolume(next.mb)} · ends in ',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-                    ),
-                  ),
-                  CountdownText(target: next.expiry!),
-                ],
-              ),
-            ),
           ),
         );
       },
@@ -484,11 +460,11 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                     ),
                     const SizedBox(width: 10),
+                    _expiryDial(),
                     pill,
                   ],
                 ),
                 const SizedBox(height: 12),
-                _balanceStrip(),
                 // ── Tab content ──
                 Expanded(
                   child: _tab == 0
@@ -504,6 +480,7 @@ class _DashboardPageState extends State<DashboardPage>
                               notify: _notifyNow,
                               onRefreshNow: _refreshNow,
                               balanceFeed: _balanceFeed,
+                              onJumpTab: (i) => setState(() => _tab = i),
                             ),
                           ),
                           // ── Right: actions ──

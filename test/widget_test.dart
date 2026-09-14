@@ -194,4 +194,13 @@ void main() {
     expect(m.isNew, isTrue);
     expect(m.displayDate, '26/09/13 14:44:04');
   });
+
+  test('Fuse-ring plan window inference (best-effort, never shown)', () {
+    expect(ZteClient.expiryWindowDays('Weekly Bundle'), 7);
+    expect(ZteClient.expiryWindowDays('MONTHLY data'), 30);
+    expect(ZteClient.expiryWindowDays('Daily Binge'), 1);
+    expect(ZteClient.expiryWindowDays('Annual pack'), 365);
+    expect(ZteClient.expiryWindowDays('Airtel NG'), 30);
+    expect(ZteClient.expiryWindowDays(''), 30);
+  });
 }
