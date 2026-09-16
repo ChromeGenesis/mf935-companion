@@ -499,8 +499,11 @@ class _DashboardPageState extends State<DashboardPage>
         ),
       ),
       bottomNavigationBar: _narrow
+          // Floating dock: generous margins on all sides so the bar
+          // hovers over the ambient background instead of striping
+          // the screen edge. The bar itself is untouched.
           ? Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: BottomNavBar(
                 selected: _tab,
                 onSelect: (i) => setState(() => _tab = i),
