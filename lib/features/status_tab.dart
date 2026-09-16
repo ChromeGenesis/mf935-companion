@@ -66,10 +66,10 @@ class StatusTab extends StatefulWidget {
   });
 
   @override
-  State<StatusTab> createState() => _StatusTabState();
+  State<StatusTab> createState() => StatusTabState();
 }
 
-class _StatusTabState extends State<StatusTab> {
+class StatusTabState extends State<StatusTab> {
   static const _balanceKey = 'data_balance_json';
   static const _balanceEvery = Duration(minutes: 20);
 
@@ -92,12 +92,12 @@ class _StatusTabState extends State<StatusTab> {
   }
 
   @override
-  void didUpdateWidget(StatusTab old) {
-    super.didUpdateWidget(old);
-    if (widget.connected && !old.connected) {
+  void didUpdateWidget(StatusTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.connected && !oldWidget.connected) {
       _loadCached();
       _onConnect();
-    } else if (!widget.connected && old.connected) {
+    } else if (!widget.connected && oldWidget.connected) {
       _balanceTimer?.cancel();
     }
   }
@@ -114,6 +114,20 @@ class _StatusTabState extends State<StatusTab> {
     _refreshDevices();
     _refreshBalance();
     _refreshSignal();
+  }
+
+  /// Pull-to-refresh entry point (dashboard RefreshIndicator): one
+  /// gesture re-polls status, balance, devices and the signal sample
+  /// concurrently. Each leg guards its own busy flag, so overlapping
+  /// drags collapse into a single round.
+  Future<void> refreshAll() async {
+    if (!widget.connected) return;
+    await Future.wait([
+      widget.onRefreshNow(),
+      _refreshBalance(),
+      _refreshDevices(),
+      _refreshSignal(),
+    ]);
   }
 
   Future<void> _loadCached() async {

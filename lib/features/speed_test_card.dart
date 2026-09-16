@@ -33,6 +33,7 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
   final _runner = SpeedTestRunner();
   SpeedPhase _phase = SpeedPhase.idle;
   double _progress = 0;
+  double? _liveBps;
   SpeedTestResult? _last;
 
   @override
@@ -64,17 +65,19 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
     }
 
     widget.log('speed test: starting…');
-    final r = await _runner.run((phase, progress) {
+    final r = await _runner.run((phase, progress, liveBps) {
       if (!mounted) return;
       setState(() {
         _phase = phase;
         _progress = progress;
+        _liveBps = liveBps;
       });
     });
     if (!mounted) return;
     setState(() {
       _last = r;
       _progress = 0;
+      _liveBps = null;
     });
     if (r.error != null && r.error != 'cancelled') {
       widget.log('speed test failed: ${r.error}');
@@ -163,18 +166,11 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
           ),
           if (running) ...[
             const SizedBox(height: 10),
-            Text(
-              SpeedTestRunner.phaseLabel(_phase),
-              style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(99),
-              child: LinearProgressIndicator(
-                value: _phase == SpeedPhase.latency ? null : _progress,
-                minHeight: 4,
-                backgroundColor: c.textMuted.withAlpha(40),
-                valueColor: AlwaysStoppedAnimation(c.accent),
+            Center(
+              child: _SpeedMeter(
+                phase: _phase,
+                progress: _progress,
+                liveBps: _liveBps,
               ),
             ),
           ],
@@ -277,6 +273,124 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Animated run meter: a sweeping progress ring with the phase icon
+/// in the middle and the live transfer rate sweeping underneath it
+/// during download/upload (percent during latency). Replaces the
+/// plain progress bar — the test reads alive while streams run.
+class _SpeedMeter extends StatelessWidget {
+  final SpeedPhase phase;
+  final double progress;
+  final double? liveBps;
+
+  const _SpeedMeter({
+    required this.phase,
+    required this.progress,
+    required this.liveBps,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    final target = progress.clamp(0.0, 1.0);
+    final icon = switch (phase) {
+      SpeedPhase.latency => Icons.timelapse_outlined,
+      SpeedPhase.download => Icons.download_outlined,
+      SpeedPhase.upload => Icons.upload_outlined,
+      _ => Icons.speed_outlined,
+    };
+    final showRate =
+        (phase == SpeedPhase.download || phase == SpeedPhase.upload) &&
+        liveBps != null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 148,
+          height: 148,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: target),
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOut,
+            builder: (ctx, v, _) => Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: c.accent.withAlpha(45),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 148,
+                    height: 148,
+                    child: CircularProgressIndicator(
+                      value: 1,
+                      strokeWidth: 11,
+                      backgroundColor: Colors.transparent,
+                      valueColor: AlwaysStoppedAnimation(
+                        c.textMuted.withAlpha(45),
+                      ),
+                      strokeCap: StrokeCap.round,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 148,
+                    height: 148,
+                    child: CircularProgressIndicator(
+                      value: v,
+                      strokeWidth: 11,
+                      backgroundColor: Colors.transparent,
+                      valueColor: AlwaysStoppedAnimation(c.accent),
+                      strokeCap: StrokeCap.round,
+                    ),
+                  ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 26, color: c.accentText),
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        width: 108,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            showRate
+                                ? formatRate(liveBps!)
+                                : '${(v * 100).round()}%',
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: c.textPrimary,
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          SpeedTestRunner.phaseLabel(phase),
+          style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+        ),
+      ],
     );
   }
 }

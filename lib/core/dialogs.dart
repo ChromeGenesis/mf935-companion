@@ -127,7 +127,12 @@ class GlassModal extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  Flexible(child: SingleChildScrollView(child: body)),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: body,
+                    ),
+                  ),
                   if (actions != null && actions!.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Row(

@@ -115,11 +115,13 @@ class SpeedTestRunner {
     SpeedPhase.cancelled => 'Cancelled',
   };
 
-  /// Run the full test. Reports every phase transition (and re-reports
-  /// download/upload progress as 0..1). Throws nothing: errors come
-  /// back as a failed [SpeedTestResult] with whatever phases completed.
+  /// Run the full test. Reports every phase transition, re-reports
+  /// download/upload progress as 0..1, and streams the live aggregate
+  /// rate (bytes/sec across streams, null outside transfers) so the UI
+  /// meter can sweep in real time. Throws nothing: errors come back as
+  /// a failed [SpeedTestResult] with whatever phases completed.
   Future<SpeedTestResult> run(
-    void Function(SpeedPhase phase, double progress) onPhase,
+    void Function(SpeedPhase phase, double progress, double? liveBps) onPhase,
   ) async {
     _cancel = CancelToken();
     double? latencyMs;
@@ -127,21 +129,21 @@ class SpeedTestRunner {
     double? upBps;
     try {
       // ── Latency: warmup (handshake cost, discarded) + median of 4.
-      onPhase(SpeedPhase.latency, 0);
+      onPhase(SpeedPhase.latency, 0, null);
       await _probeLatency();
-      onPhase(SpeedPhase.latency, 1 / 5);
+      onPhase(SpeedPhase.latency, 1 / 5, null);
       final rtts = <double>[];
       for (var i = 0; i < 4; i++) {
         rtts.add(await _probeLatency());
-        onPhase(SpeedPhase.latency, (i + 2) / 5);
+        onPhase(SpeedPhase.latency, (i + 2) / 5, null);
       }
       latencyMs = medianOf(rtts);
 
       // ── Download: warmup (slow-start, discarded) + peak of 2
       // parallel batches.
-      onPhase(SpeedPhase.download, 0);
+      onPhase(SpeedPhase.download, 0, null);
       await _downloadConn(_warmupDownloadBytes, 0, (_, _) {});
-      onPhase(SpeedPhase.download, 0.05);
+      onPhase(SpeedPhase.download, 0.05, null);
       final downs = <double>[];
       for (var b = 0; b < _batches; b++) {
         downs.add(
@@ -149,8 +151,11 @@ class SpeedTestRunner {
             conns: _batchConnsDown,
             bytesEach: _batchBytesDown,
             salt: b,
-            onProgress: (p) =>
-                onPhase(SpeedPhase.download, 0.05 + ((b + p) / _batches) * 0.95),
+            onProgress: (p, live) => onPhase(
+              SpeedPhase.download,
+              0.05 + ((b + p) / _batches) * 0.95,
+              live,
+            ),
           ),
         );
       }
@@ -158,10 +163,10 @@ class SpeedTestRunner {
 
       // ── Upload: warmup + peak of 2 parallel batches, explicit
       // Content-Length on every POST.
-      onPhase(SpeedPhase.upload, 0);
+      onPhase(SpeedPhase.upload, 0, null);
       final payload = List.filled(_batchBytesUp, 65); // 'A'
       await _uploadConn(List.filled(_warmupUploadBytes, 65), -1, (_, _) {});
-      onPhase(SpeedPhase.upload, 0.05);
+      onPhase(SpeedPhase.upload, 0.05, null);
       final ups = <double>[];
       for (var b = 0; b < _batches; b++) {
         ups.add(
@@ -169,14 +174,17 @@ class SpeedTestRunner {
             conns: _batchConnsUp,
             payload: payload,
             salt: b,
-            onProgress: (p) =>
-                onPhase(SpeedPhase.upload, 0.05 + ((b + p) / _batches) * 0.95),
+            onProgress: (p, live) => onPhase(
+              SpeedPhase.upload,
+              0.05 + ((b + p) / _batches) * 0.95,
+              live,
+            ),
           ),
         );
       }
       upBps = ups.reduce(max);
 
-      onPhase(SpeedPhase.done, 1);
+      onPhase(SpeedPhase.done, 1, null);
       return SpeedTestResult(
         at: DateTime.now(),
         latencyMs: latencyMs,
@@ -185,10 +193,10 @@ class SpeedTestRunner {
       );
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
-        onPhase(SpeedPhase.cancelled, 0);
+        onPhase(SpeedPhase.cancelled, 0, null);
         return SpeedTestResult(at: DateTime.now(), error: 'cancelled');
       }
-      onPhase(SpeedPhase.failed, 0);
+      onPhase(SpeedPhase.failed, 0, null);
       return SpeedTestResult(
         at: DateTime.now(),
         latencyMs: latencyMs,
@@ -196,7 +204,7 @@ class SpeedTestRunner {
         error: 'Network error: ${e.message ?? e.type.name}',
       );
     } catch (e) {
-      onPhase(SpeedPhase.failed, 0);
+      onPhase(SpeedPhase.failed, 0, null);
       return SpeedTestResult(
         at: DateTime.now(),
         latencyMs: latencyMs,
@@ -224,23 +232,26 @@ class SpeedTestRunner {
 
   /// One parallel download batch: [conns] concurrent streams of
   /// [bytesEach], returns summed bytes over shared wall-clock.
-  /// Progress aggregates across streams so the bar stays truthful.
+  /// Progress aggregates across streams and carries the live aggregate
+  /// rate so the UI meter sweeps in real time.
   Future<double> _parallelDown({
     required int conns,
     required int bytesEach,
     required int salt,
-    required void Function(double progress) onProgress,
+    required void Function(double progress, double liveBps) onProgress,
   }) async {
     final done = List<int>.filled(conns, 0);
     final totals = List<int>.filled(conns, bytesEach);
+    final sw = Stopwatch()..start();
+    double elapsed() => sw.elapsedMicroseconds / 1e6;
     void report() {
       final t = totals.fold<int>(0, (a, b) => a + b);
       if (t > 0) {
-        onProgress(done.fold<int>(0, (a, b) => a + b) / t);
+        final d = done.fold<int>(0, (a, b) => a + b);
+        onProgress(d / t, throughputBps(d, elapsed()));
       }
     }
 
-    final sw = Stopwatch()..start();
     final results = await Future.wait<int>([
       for (var i = 0; i < conns; i++)
         _downloadConn(bytesEach, salt * 97 + i, (d, t) {
@@ -280,15 +291,17 @@ class SpeedTestRunner {
     required int conns,
     required List<int> payload,
     required int salt,
-    required void Function(double progress) onProgress,
+    required void Function(double progress, double liveBps) onProgress,
   }) async {
     final done = List<int>.filled(conns, 0);
+    final sw = Stopwatch()..start();
+    double elapsed() => sw.elapsedMicroseconds / 1e6;
     void report() {
       final t = payload.length * conns;
-      onProgress(done.fold<int>(0, (a, b) => a + b) / t);
+      final d = done.fold<int>(0, (a, b) => a + b);
+      onProgress(d / t, throughputBps(d, elapsed()));
     }
 
-    final sw = Stopwatch()..start();
     await Future.wait<void>([
       for (var i = 0; i < conns; i++)
         _uploadConn(payload, salt * 97 + i, (d, _) {

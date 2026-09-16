@@ -291,7 +291,15 @@ class _InfoTabState extends State<InfoTab> {
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
               children: [
-                SizedBox(width: 18, height: 18),
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: Icon(
+                    Icons.signal_cellular_alt,
+                    size: 16,
+                    color: c.textMuted,
+                  ),
+                ),
                 const SizedBox(width: 8),
                 SizedBox(
                   width: 120,
@@ -393,6 +401,7 @@ class _InfoTabState extends State<InfoTab> {
       builder: (_, cons) {
         if (cons.maxWidth <= 720) {
           return SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
             padding: const EdgeInsets.only(bottom: 12),
             child: Column(
               children: [deviceCard, const SizedBox(height: 10), trafficCard],
@@ -400,6 +409,7 @@ class _InfoTabState extends State<InfoTab> {
           );
         }
         return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 12),
           child: SizedBox(
             height: cons.hasBoundedHeight && cons.maxHeight > 572

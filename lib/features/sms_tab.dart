@@ -509,7 +509,10 @@ class _SmsTabState extends State<SmsTab> {
                     children: [
                       inboxHeader(),
                       Expanded(
-                        child: SingleChildScrollView(child: inboxList()),
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: inboxList(),
+                        ),
                       ),
                     ],
                   ),
@@ -518,12 +521,16 @@ class _SmsTabState extends State<SmsTab> {
               const SizedBox(width: 10),
               Expanded(
                 flex: 5,
-                child: SingleChildScrollView(child: sideColumn),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: sideColumn,
+                ),
               ),
             ],
           );
         }
         return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 12),
           child: Column(
             children: [

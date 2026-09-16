@@ -71,6 +71,10 @@ class _DashboardPageState extends State<DashboardPage>
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
 
+  /// Key into the Status tab for pull-to-refresh (its state owns the
+  /// balance/devices/signal refresh legs).
+  final _statusKey = GlobalKey<StatusTabState>();
+
   bool get _connected => _loginOk == true;
 
   /// Seconds left before another LOGIN may be sent. The firmware locks out
@@ -381,14 +385,21 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// Status body: read-only + glanceable. Connection + diagnostics live
-  /// exclusively in Settings — Status never duplicates them.
+  /// Status body: read-only + glanceable, wrapped in pull-to-refresh.
+  /// Connection + diagnostics live exclusively in Settings — Status
+  /// never duplicates them.
   Widget _statusBody() {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 4),
-      child: StatusTab(
-        client: _client,
+    final c = context.zc;
+    return RefreshIndicator(
+      color: c.accentText,
+      backgroundColor: c.surfaceLifted,
+      onRefresh: () => _statusKey.currentState?.refreshAll() ?? Future.value(),
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: 4),
+        child: StatusTab(
+          key: _statusKey,
+          client: _client,
         connected: _connected,
         status: _status,
         log: _logLine,
@@ -400,6 +411,7 @@ class _DashboardPageState extends State<DashboardPage>
         onBalanceRaw: _logBalanceRaw,
         onJumpTab: (i) => setState(() => _tab = i),
         onUnsupported: _markUnsupported,
+        ),
       ),
     );
   }

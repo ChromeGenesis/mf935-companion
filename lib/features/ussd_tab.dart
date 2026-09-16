@@ -90,16 +90,21 @@ class _UssdTabState extends State<UssdTab> {
     widget.log('saved USSD removed: $code');
   }
 
+  /// Keypad taps drive the entry through setState so validation,
+  /// error text and the Send button react to every tap — not just to
+  /// typed keystrokes.
   void _key(String k) {
     final v = _codeCtrl.value;
     final pos = v.selection.isValid
         ? v.selection.extentOffset
         : _codeCtrl.text.length;
     final t = _codeCtrl.text;
-    _codeCtrl.value = TextEditingValue(
-      text: t.substring(0, pos) + k + t.substring(pos),
-      selection: TextSelection.collapsed(offset: pos + k.length),
-    );
+    setState(() {
+      _codeCtrl.value = TextEditingValue(
+        text: t.substring(0, pos) + k + t.substring(pos),
+        selection: TextSelection.collapsed(offset: pos + k.length),
+      );
+    });
   }
 
   void _backspace() {
@@ -109,10 +114,12 @@ class _UssdTabState extends State<UssdTab> {
         : _codeCtrl.text.length;
     if (pos <= 0) return;
     final t = _codeCtrl.text;
-    _codeCtrl.value = TextEditingValue(
-      text: t.substring(0, pos - 1) + t.substring(pos),
-      selection: TextSelection.collapsed(offset: pos - 1),
-    );
+    setState(() {
+      _codeCtrl.value = TextEditingValue(
+        text: t.substring(0, pos - 1) + t.substring(pos),
+        selection: TextSelection.collapsed(offset: pos - 1),
+      );
+    });
   }
 
   Future<void> _send() async {
@@ -212,36 +219,54 @@ class _UssdTabState extends State<UssdTab> {
     if (mounted) setState(() => _last = null);
   }
 
-  /// Dialpad grid. One build path for both placements (SSOT).
+  /// Dialpad grid + a dialer-style delete key riding beneath it,
+  /// bottom-right like a normal keypad. One build path for both
+  /// placements (SSOT).
   Widget _keypad() {
     final c = context.zc;
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      childAspectRatio: 2.4,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        for (final k in keys)
-          OutlinedButton(
-            onPressed: () => _key(k),
-            style: OutlinedButton.styleFrom(
-              padding: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+        GridView.count(
+          crossAxisCount: 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          childAspectRatio: 2.4,
+          children: [
+            for (final k in keys)
+              OutlinedButton(
+                onPressed: () => _key(k),
+                style: OutlinedButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  k,
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _codeCtrl.text.isEmpty ? null : _backspace,
+              icon: const Icon(Icons.backspace_outlined, size: 16),
+              label: const Text('Delete'),
             ),
-            child: Text(
-              k,
-              style: TextStyle(
-                color: c.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
+          ],
+        ),
       ],
     );
   }
@@ -275,6 +300,7 @@ class _UssdTabState extends State<UssdTab> {
                 ),
               ),
               const SizedBox(width: 8),
+              // Send + Cancel ride together on the right.
               ElevatedButton(
                 onPressed: _busy ? null : _send,
                 child: _busy
@@ -286,15 +312,6 @@ class _UssdTabState extends State<UssdTab> {
                     : const Text('Send'),
               ),
               const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Backspace',
-                onPressed: _backspace,
-                icon: Icon(
-                  Icons.backspace_outlined,
-                  color: c.textMuted,
-                  size: 20,
-                ),
-              ),
               OutlinedButton(
                 onPressed: _busy ? null : _cancel,
                 child: const Text('Cancel'),
@@ -476,17 +493,24 @@ class _UssdTabState extends State<UssdTab> {
             children: [
               Expanded(
                 flex: 7,
-                child: SingleChildScrollView(child: _sendCard(c, false)),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: _sendCard(c, false),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 flex: 5,
-                child: SingleChildScrollView(child: _historyCard(c)),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: _historyCard(c),
+                ),
               ),
             ],
           );
         }
         return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 12),
           child: Column(
             children: [
