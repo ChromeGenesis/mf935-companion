@@ -78,6 +78,18 @@ const knownCommands = <String, ModemCommand>{
     label: 'Power-save mode',
     nextAction: 'This firmware may not support it — leave the current mode.',
   ),
+  'SET_WIFI_COVERAGE': ModemCommand(
+    id: 'SET_WIFI_COVERAGE',
+    kind: CapabilityKind.firmwareDependent,
+    label: 'Wi-Fi coverage mode',
+    nextAction: 'This firmware may not support it — keep the current mode.',
+  ),
+  'SET_WIFI_SLEEP': ModemCommand(
+    id: 'SET_WIFI_SLEEP',
+    kind: CapabilityKind.firmwareDependent,
+    label: 'Wi-Fi sleep timer',
+    nextAction: 'This firmware may not support it — keep the current timer.',
+  ),
   'REBOOT_DEVICE': ModemCommand(
     id: 'REBOOT_DEVICE',
     kind: CapabilityKind.writable,

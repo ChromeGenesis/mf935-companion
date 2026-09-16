@@ -141,7 +141,7 @@ class SavedUssdSection extends StatelessWidget {
                   vertical: 6,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(70),
+                  color: c.chip,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: c.borderSubtle),
                 ),

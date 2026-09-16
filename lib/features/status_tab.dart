@@ -5,15 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'status_cards.dart';
-import '../core/capability.dart';
-import '../core/widgets.dart';
+import 'speed_test_card.dart';
+import '../core/signal_locator.dart';
 import '../core/zte_client.dart';
 
-/// Status tab: device card, carrier data-balance card (*323*1# snapshot,
-/// persisted — never guessed from SMS), and the stat tile grid.
-///
-/// Owns the balance lifecycle: cached snapshot on boot, refresh on
-/// connect, re-dial every 20 min, expiry alerts. Main stays a shell.
+/// Status tab (SSOT): hero (battery/carrier/signal + balance + live
+/// metrics), fully-expanded connected devices, speed test and the
+/// signal-locator launcher. All state-changing controls (reboot,
+/// shutdown, connection, power management, diagnostics) live on the
+/// Settings tab — Status is read-only + glanceable. The raw balance
+/// modem reply is archived to the shell for the Settings tab; only
+/// parsed results surface here.
 class StatusTab extends StatefulWidget {
   final ZteClient client;
   final bool connected;
@@ -22,9 +24,22 @@ class StatusTab extends StatefulWidget {
   final Future<void> Function(String title, String body) notify;
   final Future<void> Function() onRefreshNow;
 
-  /// Published snapshot feed: main's header fuse ring listens to
-  /// this, so the countdown lives app-wide, not in the hero card.
+  /// Published snapshot feed: the dashboard balance card reads this
+  /// for its countdown pill, so the "when does my data die" answer
+  /// lives alongside the balance it describes.
   final ValueNotifier<DataBalance?> balanceFeed;
+
+  /// Published live signal sample: the signal-locator modal/sheet
+  /// reads this instead of polling on its own.
+  final ValueNotifier<SignalSample?> signalFeed;
+
+  /// Open the router signal-locator tool (modal on desktop, bottom
+  /// sheet on mobile).
+  final Future<void> Function()? onOpenSignalLocator;
+
+  /// Archive a raw balance reply (verbose modem text lives in the
+  /// Settings tab's raw data log, never on the primary screen).
+  final void Function(String raw)? onBalanceRaw;
 
   /// Jump to another tab (SMS unread → inbox, devices → Device).
   /// Null-safe: tiles stay static when the shell doesn't provide it.
@@ -43,6 +58,9 @@ class StatusTab extends StatefulWidget {
     required this.notify,
     required this.onRefreshNow,
     required this.balanceFeed,
+    required this.signalFeed,
+    this.onOpenSignalLocator,
+    this.onBalanceRaw,
     this.onJumpTab,
     this.onUnsupported,
   });
@@ -60,15 +78,11 @@ class _StatusTabState extends State<StatusTab> {
   Timer? _balanceTimer;
   final Set<String> _expiryNotified = {};
 
-  // Device management (consolidated from the Device tab): connected
-  // clients, power-save presets, reboot/shutdown.
+  // Connected clients: read-only, fully expanded on Status. Device
+  // management controls live on the Settings tab.
   List<AttachedDevice> _devices = [];
   bool _devicesBusy = false;
   DateTime? _devicesAt;
-  bool _devicesOpen = true;
-  String _powerSave = '';
-  bool _powerBusy = false;
-  bool _powerUnsupported = false;
 
   @override
   void initState() {
@@ -99,7 +113,7 @@ class _StatusTabState extends State<StatusTab> {
     _balanceTimer = Timer.periodic(_balanceEvery, (_) => _refreshBalance());
     _refreshDevices();
     _refreshBalance();
-    _loadPowerSave();
+    _refreshSignal();
   }
 
   Future<void> _loadCached() async {
@@ -118,18 +132,25 @@ class _StatusTabState extends State<StatusTab> {
     }
   }
 
-  /// Dial *323*1# and persist the snapshot. Deletion-proof: the modem
-  /// is the source of truth, SMS is never consulted.
+  /// Dial the carrier's balance code (MTN *323*4#, Airtel *323*1#)
+  /// and persist the snapshot. Deletion-proof: the modem
+  /// is the source of truth, SMS is never consulted. The raw modem
+  /// reply is archived for the Settings tab (verbose chatter) — the
+  /// card here shows only parsed results.
   Future<void> _refreshBalance() async {
     if (!widget.connected || _balanceBusy) return;
     setState(() => _balanceBusy = true);
     try {
-      final b = await widget.client.fetchDataBalance();
+      final provider = ZteClient.carrierName(
+        '${widget.status['network_provider'] ?? ''}',
+      );
+      final b = await widget.client.fetchDataBalance(providerHint: provider);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_balanceKey, jsonEncode(b.toJson()));
       if (!mounted) return;
       setState(() => _balance = b);
       widget.balanceFeed.value = b;
+      widget.onBalanceRaw?.call(b.raw);
       widget.log(
         'balance: ${ZteClient.formatDataVolume(b.totalMb)} across ${b.bundles.length} bundles',
       );
@@ -138,6 +159,17 @@ class _StatusTabState extends State<StatusTab> {
       widget.log('balance check failed: $e');
     } finally {
       if (mounted) setState(() => _balanceBusy = false);
+    }
+  }
+
+  /// Pull one live signal sample into the published feed (best-effort;
+  /// the locator tool also re-reads on its own 5s cadence while open).
+  Future<void> _refreshSignal() async {
+    if (!widget.connected) return;
+    try {
+      widget.signalFeed.value = await SignalSample.fromClient(widget.client);
+    } catch (_) {
+      // Read-only: keep the last sample on failure.
     }
   }
 
@@ -174,16 +206,7 @@ class _StatusTabState extends State<StatusTab> {
   String _fmtDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
-  /// Tile honesty, no default shit: '—' when logged out, 'n/a' when the
-  /// modem gave nothing, the value otherwise.
-  String _tileText(dynamic raw) {
-    if (!widget.connected) return '—';
-    final v = '${raw ?? ''}';
-    return v.isEmpty ? 'n/a' : v;
-  }
-
-  /// Attached-station list (separate endpoint, best-effort). Feeds the
-  /// device-info card with one fetch.
+  /// Attached-station list (separate endpoint, best-effort).
   Future<void> _refreshDevices() async {
     if (!widget.connected || _devicesBusy) return;
     setState(() => _devicesBusy = true);
@@ -201,70 +224,6 @@ class _StatusTabState extends State<StatusTab> {
     }
   }
 
-  Future<void> _loadPowerSave() async {
-    if (!widget.connected) return;
-    try {
-      final raw = await widget.client.getPowerSave();
-      if (!mounted) return;
-      setState(() => _powerSave = raw);
-    } catch (e) {
-      widget.log('power-save load failed: $e');
-    }
-  }
-
-  Future<void> _applyPowerSave() async {
-    if (!widget.connected || _powerUnsupported) return;
-    setState(() => _powerBusy = true);
-    try {
-      final mode = _powerSave;
-      final ok = await widget.client.setPowerSave(mode);
-      if (!ok && mounted) {
-        setState(() => _powerUnsupported = true);
-        widget.onUnsupported?.call(
-          'SET_AUTO_POWER_SAVE',
-          'result=error on mode "$mode"',
-        );
-      }
-      widget.log(
-        ok
-            ? 'power-save set to "$mode"'
-            : formatCommandFailure(
-                command: 'SET_AUTO_POWER_SAVE',
-                result: 'error',
-                next:
-                    'This firmware may not support power-save writes — leaving current mode.',
-              ),
-      );
-    } catch (e) {
-      widget.log('power-save failed: $e');
-    } finally {
-      if (mounted) setState(() => _powerBusy = false);
-    }
-  }
-
-  Future<void> _devicePowerAction(String kind) async {
-    final confirm = await confirmAction(
-      context,
-      icon: kind == 'reboot' ? Icons.restart_alt : Icons.power_settings_new,
-      title: kind == 'reboot' ? 'Reboot the MiFi?' : 'Shut down?',
-      message: kind == 'reboot'
-          ? 'WiFi drops for ~1 minute, then it comes back. The app will keep polling.'
-          : 'The MiFi turns OFF. You will need to power it on physically.',
-      confirmLabel: kind == 'reboot' ? 'Reboot' : 'Shut down',
-    );
-    if (!confirm) return;
-    try {
-      final raw = kind == 'reboot'
-          ? await widget.client.reboot()
-          : await widget.client.shutdown();
-      widget.log('$kind sent. Modem said: $raw');
-    } catch (e) {
-      // Reboot/shutdown kills the HTTP connection mid-reply — a transport
-      // error here usually MEANS it worked.
-      widget.log('$kind sent (connection dropped as expected: $e)');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final s = widget.status;
@@ -276,7 +235,6 @@ class _StatusTabState extends State<StatusTab> {
     final netLine = netType.isEmpty || netType == '—'
         ? 'Log in to start polling'
         : '$netType · ${widget.client.gatewayIp}';
-    final unread = int.tryParse('${s['sms_unread_num'] ?? ''}');
     final rx = double.tryParse('${s['monthly_rx_bytes'] ?? '0'}') ?? 0;
     final tx = double.tryParse('${s['monthly_tx_bytes'] ?? '0'}') ?? 0;
     final usedMb = (rx + tx) / (1024 * 1024);
@@ -292,99 +250,56 @@ class _StatusTabState extends State<StatusTab> {
           provider: provider == '—' ? 'No device data yet' : provider,
           netLine: netLine,
           signal: signal,
-          unreadText: _tileText(s['sms_unread_num']),
-          unreadAlive: widget.connected && (unread ?? 0) > 0,
-          onUnreadTap: widget.onJumpTab == null
-              ? null
-              : () => widget.onJumpTab!(1),
-          onRefreshNow: !widget.connected ? null : () => widget.onRefreshNow(),
+          onOpenSignalLocator: widget.connected
+              ? () => widget.onOpenSignalLocator?.call()
+              : null,
+          metrics: [
+            (
+              Icons.data_usage,
+              widget.connected ? ZteClient.formatDataVolume(usedMb) : '—',
+              'month usage',
+            ),
+            (
+              Icons.speed_outlined,
+              !widget.connected
+                  ? '—'
+                  : liveDown == null
+                  ? 'n/a'
+                  : ZteClient.formatRate(liveDown),
+              'live down',
+            ),
+            (
+              Icons.upload_outlined,
+              !widget.connected
+                  ? '—'
+                  : liveUp == null
+                  ? 'n/a'
+                  : ZteClient.formatRate(liveUp),
+              'live up',
+            ),
+          ],
           balance: BalanceSection(
             balance: _balance,
             busy: _balanceBusy,
             connected: widget.connected,
             onRefresh: _refreshBalance,
+            balanceCode: ZteClient.balanceUssdForProvider(provider),
           ),
         ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: StatTile(
-                icon: Icons.data_usage,
-                value: widget.connected
-                    ? ZteClient.formatDataVolume(usedMb)
-                    : '—',
-                caption: 'month usage',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: StatTile(
-                icon: Icons.speed_outlined,
-                value: !widget.connected
-                    ? '—'
-                    : liveDown == null
-                    ? 'n/a'
-                    : ZteClient.formatRate(liveDown),
-                caption: 'live down',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: StatTile(
-                icon: Icons.upload_outlined,
-                value: !widget.connected
-                    ? '—'
-                    : liveUp == null
-                    ? 'n/a'
-                    : ZteClient.formatRate(liveUp),
-                caption: 'live up',
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final sideBySide = constraints.maxWidth >= 560;
-            final devices = DevicesCard(
-              devices: _devices,
-              devicesAt: _devicesAt,
-              busy: _devicesBusy,
-              open: _devicesOpen,
-              connected: widget.connected,
-              onRefresh: _refreshDevices,
-              onToggleOpen: () => setState(() => _devicesOpen = !_devicesOpen),
-            );
-            final power = PowerCard(
-              powerSave: _powerSave,
-              busy: _powerBusy,
-              connected: widget.connected,
-              onChanged: (v) => setState(() => _powerSave = v),
-              onApply: _applyPowerSave,
-            );
-            if (!sideBySide) {
-              return Column(
-                children: [devices, const SizedBox(height: 10), power],
-              );
-            }
-            return SizedBox(
-              height: 240,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 7, child: devices),
-                  const SizedBox(width: 10),
-                  Expanded(flex: 3, child: power),
-                ],
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 10),
-        DeviceActionsCard(
+        // Connected devices: always fully expanded — the height cap and
+        // collapse toggle are gone; every client is visible at a glance.
+        DevicesCard(
+          devices: _devices,
+          devicesAt: _devicesAt,
+          busy: _devicesBusy,
           connected: widget.connected,
-          onAction: _devicePowerAction,
+          onRefresh: _refreshDevices,
+        ),
+        const SizedBox(height: 10),
+        SpeedTestCard(
+          connected: widget.connected,
+          log: widget.log,
         ),
       ],
     );

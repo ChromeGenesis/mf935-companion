@@ -1,8 +1,10 @@
 library;
 
 /// Dashboard shell (SSOT): session, polling, navigation and tab
-/// composition. App bootstrap (`main()`, [ZteApp]) lives in `main.dart`;
-/// connection + diagnostics panels live in `dashboard_panels.dart`.
+/// composition. App bootstrap (`main()`, [ZteApp]) lives in `main.dart`.
+/// Header is a collapsing sliver (TradeMum parity) — the countdown and
+/// theme controls live in their feature cards, never in the header.
+/// Connection + diagnostics panels live exclusively in Settings.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -16,8 +18,11 @@ import '../core/poller.dart';
 import '../core/capability.dart';
 import '../core/diagnostics.dart';
 import '../core/platform.dart';
-import 'dashboard_panels.dart';
+import '../core/signal_locator.dart';
+import 'bottom_nav.dart';
 import 'info_tab.dart';
+import 'settings_tab.dart';
+import 'signal_locator_widgets.dart';
 import '../core/notifications.dart';
 import 'sidebar.dart';
 import 'sms_tab.dart';
@@ -45,13 +50,21 @@ class _DashboardPageState extends State<DashboardPage>
   final _passCtrl = TextEditingController();
   Map<String, dynamic> _status = {};
   final List<String> _log = [];
+  // Raw balance replies (MTN *323*4# / Airtel *323*1#): archived for
+  // the Settings tab only — the primary screen surfaces parsed
+  // results, never verbose modem text.
+  final List<String> _balanceRawLog = [];
   String _loginMessage = '';
   bool? _loginOk;
   bool _busy = false;
   int _tab = 0;
   bool _narrow = false; // <640px: bottom nav; otherwise sidebar
-  // Published balance feed (StatusTab writes, header fuse ring reads).
+  // Published balance feed (StatusTab writes; the dashboard balance
+  // card reads it for the countdown pill).
   final ValueNotifier<DataBalance?> _balanceFeed = ValueNotifier<DataBalance?>(
+    null,
+  );
+  final ValueNotifier<SignalSample?> _signalFeed = ValueNotifier<SignalSample?>(
     null,
   );
   Timer? _cooldownTimer;
@@ -100,6 +113,7 @@ class _DashboardPageState extends State<DashboardPage>
     }
     _cooldownTimer?.cancel();
     _balanceFeed.dispose();
+    _signalFeed.dispose();
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
@@ -152,6 +166,56 @@ class _DashboardPageState extends State<DashboardPage>
       _log.insert(0, '${TimeOfDay.now().format(context)}  $line');
       if (_log.length > 200) _log.removeLast();
     });
+  }
+
+  /// Archive a raw balance reply for the Settings tab (verbose modem
+  /// chatter never surfaces on the primary screen).
+  void _logBalanceRaw(String reply) {
+    if (reply.trim().isEmpty) return;
+    setState(() {
+      _balanceRawLog.insert(
+        0,
+        '${TimeOfDay.now().format(context)}  ${reply.trim()}',
+      );
+      if (_balanceRawLog.length > 60) _balanceRawLog.removeLast();
+    });
+  }
+
+  /// Router signal locator: modal dialog on desktop, bottom sheet on
+  /// mobile — grounded in RSRP/RSRQ/SINR metric analysis. Width-based
+  /// (640px): desktop windows render the glass modal, phones get the
+  /// opaque bottom sheet.
+  Future<void> _openSignalLocator() async {
+    final narrow = MediaQuery.sizeOf(context).width < 640;
+    if (narrow) {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black54,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        // Wrap-content: the sheet sizes itself to the readout, no
+        // fixed 85% box with dead space underneath.
+        builder: (_) => SignalLocatorSheet(
+          signalFeed: _signalFeed,
+          client: _client,
+        ),
+      );
+    } else {
+      await showGlassModal<void>(
+        context,
+        icon: Icons.explore_outlined,
+        title: 'Router signal locator',
+        subtitle: 'RSRP · RSRQ · SINR placement analysis',
+        width: 620,
+        body: SignalLocatorBody(
+          signalFeed: _signalFeed,
+          client: _client,
+        ),
+      );
+    }
   }
 
   Future<void> _doLogin() async {
@@ -317,89 +381,65 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// Header fuse ring: the "when does my data die" answer at title
-  /// level, visible on every tab. Tapping jumps to Status. Renders
-  /// nothing when there is no live bundle to count down to.
-  Widget _expiryDial() {
-    return ValueListenableBuilder<DataBalance?>(
-      valueListenable: _balanceFeed,
-      builder: (_, b, _) {
-        final next = b?.nextExpiry;
-        final exp = next?.expiry;
-        if (!_connected || exp == null || !exp.isAfter(DateTime.now())) {
-          return const SizedBox.shrink();
-        }
-        return Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: ExpiryDial(
-            bundle: next!,
-            compact: _narrow,
-            onTap: () => setState(() => _tab = 0),
-          ),
-        );
-      },
+  /// Status body: read-only + glanceable. Connection + diagnostics live
+  /// exclusively in Settings — Status never duplicates them.
+  Widget _statusBody() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: StatusTab(
+        client: _client,
+        connected: _connected,
+        status: _status,
+        log: _logLine,
+        notify: _notifyNow,
+        onRefreshNow: _refreshNow,
+        balanceFeed: _balanceFeed,
+        signalFeed: _signalFeed,
+        onOpenSignalLocator: _openSignalLocator,
+        onBalanceRaw: _logBalanceRaw,
+        onJumpTab: (i) => setState(() => _tab = i),
+        onUnsupported: _markUnsupported,
+      ),
     );
   }
 
-  /// Status panes: side-by-side on desktop (log fills to the bottom),
-  /// stacked + scrollable on narrow screens. One composition path (SSOT).
-  Widget _statusBody(Widget left) {
-    final conn = ConnectionPanel(
+  /// All five tab bodies, index-aligned with the nav. They live in an
+  /// [IndexedStack] so switching tabs never disposes state — scroll
+  /// offsets, selections, text fields and loaded data are exactly
+  /// where you left them.
+  List<Widget> _tabBodies() => [
+    _statusBody(),
+    SmsTab(client: _client, connected: _connected, log: _logLine),
+    UssdTab(
+      client: _client,
+      connected: _connected,
+      log: _logLine,
+      onUnsupported: _markUnsupported,
+    ),
+    InfoTab(client: _client, connected: _connected, log: _logLine),
+    SettingsTab(
+      client: _client,
+      connected: _connected,
       ipCtrl: _ipCtrl,
       passCtrl: _passCtrl,
       busy: _busy,
       cooldownLeft: _cooldownLeft,
-      connected: _connected,
       loginMessage: _loginMessage,
       loginOk: _loginOk,
       onLogin: _doLogin,
       onTest: _testConnection,
       onPasswordSubmit: _doLogin,
-    );
-    final log = DiagnosticsPanel(
-      lines: _log,
-      onClear: () => setState(() => _log.clear()),
-      onExport: _exportDiagnostics,
+      logLines: _log,
+      onClearLog: () => setState(() => _log.clear()),
+      onExportDiagnostics: _exportDiagnostics,
       unsupported: capabilities.unsupported,
-    );
-    if (_narrow) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Column(
-          children: [
-            left,
-            const SizedBox(height: 12),
-            conn,
-            const SizedBox(height: 10),
-            SizedBox(height: 220, child: log),
-          ],
-        ),
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: 12,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: left,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          flex: 8,
-          child: Column(
-            children: [
-              conn,
-              const SizedBox(height: 10),
-              Expanded(child: log),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+      balanceRawLog: _balanceRawLog,
+      onClearBalanceLog: () => setState(() => _balanceRawLog.clear()),
+      log: _logLine,
+      onUnsupported: _markUnsupported,
+    ),
+  ];
 
   @override
   void onWindowClose() async {
@@ -425,151 +465,129 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  // ── Layout: two panes, everything visible without scrolling ──
+  // ── Layout: collapsing sliver header + tab body ──
+  // TradeMum parity: the header is a SliverAppBar inside a
+  // NestedScrollView, so it collapses/scrolls smoothly with the body
+  // while each tab keeps its own scrollable. The header carries the
+  // brand only — countdown + theme live in their feature cards.
   @override
   Widget build(BuildContext context) {
-    final c = context.zc;
-
-    final pill = !_connected
-        ? StatusPill(label: 'Disconnected', color: c.danger)
-        : StatusPill(label: 'Connected · ${_client.gatewayIp}', color: c.live);
-
     _narrow = MediaQuery.sizeOf(context).width < 640;
 
-    return Scaffold(
+    // AnnotatedRegion carries the transparent-status-bar style (see
+    // [ZSystemUI]): it rebuilds with the theme, so toggling light/dark
+    // in Settings flips the status-bar icons with it.
+    // No SafeAreas anywhere: content scrolls full-bleed beneath the OS
+    // status + system bars (both transparent via edge-to-edge).
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: ZSystemUI.overlay(context),
+      child: Scaffold(
       body: AmbientBackground(
         child: _shell(
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+            child: NestedScrollView(
+              physics: const BouncingScrollPhysics(),
+              headerSliverBuilder: (ctx, innerScrolled) =>
+                  [const ZSliverHeader()],
+              body: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: IndexedStack(index: _tab, children: _tabBodies()),
+              ),
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: _narrow
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: BottomNavBar(
+                selected: _tab,
+                onSelect: (i) => setState(() => _tab = i),
+              ),
+            )
+          : null,
+      ),
+    );
+  }
+}
+
+/// Collapsing dashboard header (TradeMum `GlassSliverAppBar` parity):
+/// transparent sliver, no pin — it scrolls away with the body and
+/// reappears on scroll-up via the nested scroll coordination. Brand
+/// only, full width: with the countdown + theme toggle relocated to
+/// their feature cards, nothing competes for header space, so the
+/// title never truncates. The text is additionally scale-down fitted
+/// as a guard on very narrow phones.
+class ZSliverHeader extends StatelessWidget {
+  const ZSliverHeader({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    final narrow = MediaQuery.sizeOf(context).width < 640;
+    return SliverAppBar(
+      systemOverlayStyle: ZSystemUI.overlay(context),
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: false,
+      floating: false,
+      pinned: false,
+      automaticallyImplyLeading: false,
+      titleSpacing: 0,
+      toolbarHeight: 64,
+      title: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: c.accent.withAlpha(30),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: c.accent.withAlpha(110)),
+            ),
+            child: Icon(
+              Icons.wifi_tethering,
+              color: c.accentText,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Header ──
-                Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: c.accent.withAlpha(30),
-                        borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: c.accent.withAlpha(110)),
-                      ),
-                      child: Icon(
-                        Icons.wifi_tethering,
-                        color: c.accentText,
-                        size: 20,
-                      ),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'MiFi Companion',
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'MiFi Companion',
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: c.textPrimary,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          Text(
-                            'ZTE MiFi dashboard · battery · signal · data',
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: c.textMuted,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    _expiryDial(),
-                    pill,
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 12),
-                // ── Tab content ──
-                Expanded(
-                  child: _tab == 0
-                      ? _statusBody(
-                          StatusTab(
-                            client: _client,
-                            connected: _connected,
-                            status: _status,
-                            log: _logLine,
-                            notify: _notifyNow,
-                            onRefreshNow: _refreshNow,
-                            balanceFeed: _balanceFeed,
-                            onJumpTab: (i) => setState(() => _tab = i),
-                            onUnsupported: _markUnsupported,
-                          ),
-                        )
-                      : _tab == 1
-                      ? SmsTab(
-                          client: _client,
-                          connected: _connected,
-                          log: _logLine,
-                        )
-                      : _tab == 2
-                      ? UssdTab(
-                          client: _client,
-                          connected: _connected,
-                          log: _logLine,
-                          onUnsupported: _markUnsupported,
-                        )
-                      : InfoTab(
-                          client: _client,
-                          connected: _connected,
-                          log: _logLine,
-                        ),
-                ),
-                if (_narrow) const SizedBox(height: 8),
-                if (_narrow)
-                  NavigationBar(
-                    height: 56,
-                    backgroundColor: Colors.transparent,
-                    indicatorColor: c.accent.withAlpha(40),
-                    selectedIndex: _tab,
-                    onDestinationSelected: (i) => setState(() => _tab = i),
-                    labelTextStyle: WidgetStatePropertyAll(
-                      TextStyle(color: c.textSecondary, fontSize: 11),
+                if (!narrow)
+                  Text(
+                    'ZTE MiFi dashboard · battery · signal · data',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: c.textMuted,
+                      fontSize: 11.5,
                     ),
-                    destinations: [
-                      NavigationDestination(
-                        icon: Icon(
-                          Icons.dashboard_outlined,
-                          color: c.textMuted,
-                        ),
-                        selectedIcon: Icon(
-                          Icons.dashboard,
-                          color: c.accentText,
-                        ),
-                        label: 'Status',
-                      ),
-                      NavigationDestination(
-                        icon: Icon(Icons.sms_outlined, color: c.textMuted),
-                        selectedIcon: Icon(Icons.sms, color: c.accentText),
-                        label: 'SMS',
-                      ),
-                      NavigationDestination(
-                        icon: Icon(Icons.dialpad_outlined, color: c.textMuted),
-                        selectedIcon: Icon(Icons.dialpad, color: c.accentText),
-                        label: 'USSD',
-                      ),
-                      NavigationDestination(
-                        icon: Icon(Icons.info_outline, color: c.textMuted),
-                        selectedIcon: Icon(Icons.info, color: c.accentText),
-                        label: 'Info',
-                      ),
-                    ],
                   ),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

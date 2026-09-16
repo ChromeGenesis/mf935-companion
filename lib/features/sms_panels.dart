@@ -10,9 +10,10 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/ui_kit.dart';
 
-/// Inbox header: title + global actions, store switcher, search,
-/// bulk bar. The message list below is separate so desktop can give
-/// it the full left height with its own scroll.
+/// Inbox header: title + global actions, store switcher, search.
+/// Selection needs no extra bar: one header icon toggles select-all /
+/// clear, and per-group checkboxes + per-group delete cover the rest —
+/// so entering selection mode never moves or covers anything.
 class SmsInboxHeader extends StatelessWidget {
   final int selectedCount;
   final int unreadTotal;
@@ -21,16 +22,13 @@ class SmsInboxHeader extends StatelessWidget {
   final String capLine;
   final TextEditingController searchCtrl;
   final String search;
-  final bool bulkVisible;
+  final bool allSelected;
   final VoidCallback? onMarkAllRead;
   final VoidCallback? onRefresh;
   final ValueChanged<int> onStoreChanged;
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onClearSearch;
-  final VoidCallback onSelectAll;
-  final VoidCallback onSelectNone;
-  final VoidCallback? onMarkReadSelected;
-  final VoidCallback? onBulkDelete;
+  final VoidCallback onToggleSelectAll;
 
   const SmsInboxHeader({
     super.key,
@@ -41,16 +39,13 @@ class SmsInboxHeader extends StatelessWidget {
     required this.capLine,
     required this.searchCtrl,
     required this.search,
-    required this.bulkVisible,
+    required this.allSelected,
     this.onMarkAllRead,
     this.onRefresh,
     required this.onStoreChanged,
     required this.onSearchChanged,
     required this.onClearSearch,
-    required this.onSelectAll,
-    required this.onSelectNone,
-    this.onMarkReadSelected,
-    this.onBulkDelete,
+    required this.onToggleSelectAll,
   });
 
   @override
@@ -61,8 +56,20 @@ class SmsInboxHeader extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(
+          // Same 11px size on label + count: with the old 12px count
+          // against the padded section label the tally visibly floated
+          // off the inbox line. Matched sizes center-align exactly.
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SectionLabel('Inbox'),
+            Text(
+              'INBOX',
+              style: TextStyle(
+                color: c.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.6,
+              ),
+            ),
             if (selectedCount > 0)
               Padding(
                 padding: const EdgeInsets.only(left: 8),
@@ -70,8 +77,9 @@ class SmsInboxHeader extends StatelessWidget {
                   '$selectedCount picked',
                   style: TextStyle(
                     color: c.accentText,
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
                   ),
                 ),
               )
@@ -80,10 +88,24 @@ class SmsInboxHeader extends StatelessWidget {
                 padding: const EdgeInsets.only(left: 8),
                 child: Text(
                   '$unreadTotal unread',
-                  style: TextStyle(color: c.textMuted, fontSize: 12),
+                  style: TextStyle(
+                    color: c.textMuted,
+                    fontSize: 11,
+                    letterSpacing: 0.4,
+                  ),
                 ),
               ),
             const Spacer(),
+            IconButton(
+              tooltip: allSelected ? 'Clear selection' : 'Select all',
+              onPressed: onToggleSelectAll,
+              icon: Icon(
+                Icons.select_all,
+                color: allSelected ? c.accentText : c.textMuted,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 4),
             IconButton(
               tooltip: 'Mark all read',
               onPressed: (busy || unreadTotal == 0) ? null : onMarkAllRead,
@@ -103,6 +125,7 @@ class SmsInboxHeader extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 8),
         Row(
           children: [
             PillSwitcher<int>(
@@ -145,44 +168,6 @@ class SmsInboxHeader extends StatelessWidget {
             onChanged: onSearchChanged,
           ),
         ),
-        if (bulkVisible) ...[
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: c.accent.withAlpha(24),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: c.accent.withAlpha(90)),
-            ),
-            child: Row(
-              children: [
-                TextButton(onPressed: onSelectAll, child: const Text('All')),
-                TextButton(onPressed: onSelectNone, child: const Text('None')),
-                const Spacer(),
-                TextButton(
-                  onPressed: busy || selectedCount == 0
-                      ? null
-                      : onMarkReadSelected,
-                  child: const Text('Mark read'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: c.danger,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
-                    ),
-                  ),
-                  onPressed: busy || selectedCount == 0 ? null : onBulkDelete,
-                  child: Text(
-                    'Delete${selectedCount == 0 ? '' : ' ($selectedCount)'}',
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
         const SizedBox(height: 6),
       ],
     );

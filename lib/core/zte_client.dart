@@ -455,8 +455,9 @@ class ZteClient {
   static DataBalance resolveDataBalance(String raw, DateTime fetchedAt) =>
       zu.resolveDataBalance(raw, fetchedAt);
 
-  /// Plan window in days inferred from the bundle name. Drives the header
-  /// fuse ring only — never displayed as fact, the exact countdown is.
+  /// Plan window in days inferred from the bundle name. Drives the
+  /// dashboard countdown pill only — never displayed as fact, the exact
+  /// countdown is.
   static int expiryWindowDays(String name) => zu.expiryWindowDays(name);
 
   /// Every `<amount> KB|MB|GB` in free text, converted to MB.
@@ -471,13 +472,16 @@ class ZteClient {
   static List<DataBundle> parseDataBundles(String text) =>
       zu.parseDataBundles(text);
 
-  /// Dial *323*1#, follow "Next" pages (reply "n", up to [maxPages]),
-  /// return the parsed snapshot. Throws on modem failure.
-  Future<DataBalance> fetchDataBalance({int maxPages = 3}) async {
+  /// Dial the carrier's balance code, follow "Next" pages (reply "n",
+  /// up to [maxPages]), return the parsed snapshot. Throws on modem
+  /// failure. MTN uses *323*4#, Airtel/others use *323*1# — pass the
+  /// current provider string via [providerHint] to pick correctly.
+  Future<DataBalance> fetchDataBalance({int maxPages = 3, String? providerHint}) async {
+    final code = zu.balanceUssdForProvider(providerHint ?? '');
     try {
       await cancelUssd();
     } catch (_) {}
-    var r = await runUssd('*323*1#');
+    var r = await runUssd(code);
     if (!r.success) throw Exception(r.error.isEmpty ? 'USSD failed' : r.error);
     var raw = r.text;
     var pages = 1;
@@ -494,6 +498,10 @@ class ZteClient {
     } catch (_) {}
     return resolveDataBalance(raw, DateTime.now());
   }
+
+  /// Balance USSD for a provider string (MTN -> *323*4#, else *323*1#).
+  static String balanceUssdForProvider(String provider) =>
+      zu.balanceUssdForProvider(provider);
 
   /// "5m ago", "2h ago", "3d ago" for snapshot freshness labels.
   static String timeAgo(DateTime t) => zu.timeAgo(t);
@@ -760,6 +768,52 @@ class ZteClient {
         'isTest': 'false',
         'goformId': 'SET_AUTO_POWER_SAVE',
         'auto_power_save': mode,
+      },
+    );
+    return _okResult(res.data) ?? res.statusCode == 200;
+  }
+
+  /// Wi-Fi coverage mode (stock ZTE app: Short range / Standard /
+  /// Wall pass-through). 'wifi_coverage' is exposed by getDeviceInfo;
+  /// this reads it alone for the settings card.
+  Future<String> getWifiCoverage() async {
+    final m = await getStatus(cmds: const ['wifi_coverage']);
+    return '${m['wifi_coverage'] ?? ''}';
+  }
+
+  /// Write the Wi-Fi coverage mode. Wire shape mirrors the stock app's
+  /// SETTINGS_DATA switch (goformId=SET_WIFI_COVERAGE). Firmware-dependent:
+  /// a false return just means this firmware rejected it.
+  Future<bool> setWifiCoverage(String mode) async {
+    final res = await _dio.post(
+      '/goform/goform_set_cmd_process',
+      data: {
+        'isTest': 'false',
+        'goformId': 'SET_WIFI_COVERAGE',
+        'wifi_coverage': mode,
+      },
+    );
+    return _okResult(res.data) ?? res.statusCode == 200;
+  }
+
+  /// Wi-Fi sleep timer in minutes as reported by the firmware
+  /// ('wifi_sleep_time', seconds — converted here to minutes).
+  Future<int?> getWifiSleepMinutes() async {
+    final m = await getStatus(cmds: const ['wifi_sleep_time']);
+    final secs = int.tryParse('${m['wifi_sleep_time'] ?? ''}');
+    if (secs == null) return null;
+    return secs > 0 ? (secs / 60).round() : 0;
+  }
+
+  /// Write the Wi-Fi sleep preset (goformId=SET_WIFI_SLEEP,
+  /// wifi_sleep_time in minutes). Firmware-dependent as above.
+  Future<bool> setWifiSleep(int minutes) async {
+    final res = await _dio.post(
+      '/goform/goform_set_cmd_process',
+      data: {
+        'isTest': 'false',
+        'goformId': 'SET_WIFI_SLEEP',
+        'wifi_sleep_time': '$minutes',
       },
     );
     return _okResult(res.data) ?? res.statusCode == 200;

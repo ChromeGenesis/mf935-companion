@@ -1,9 +1,11 @@
 import 'dart:convert';
-import 'dart:ui';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:zte_mf935_app/main.dart';
+import 'package:zte_mf935_app/core/signal_locator.dart';
+import 'package:zte_mf935_app/core/speed_test.dart';
 import 'package:zte_mf935_app/core/widgets.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
 
@@ -13,9 +15,12 @@ void main() {
     tester.view.physicalSize = const Size(980, 700);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const ZteApp());
+    await tester.pumpWidget(const ZteApp(initialMode: ThemeMode.dark));
 
     expect(find.text('MiFi Companion'), findsWidgets);
+    // Connection lives exclusively in Settings (Status is read-only).
+    await tester.tap(find.text('Settings').first);
+    await tester.pumpAndSettle();
     expect(find.text('Login & poll'), findsOneWidget);
   });
 
@@ -179,14 +184,23 @@ void main() {
     expect(back.bundles.length, 2);
   });
 
-  test('Countdown formatter', () {
+  test('Countdown formatter — whole days above 24h, clock under a day', () {
+    // Above 24h: whole days only, no clock component.
     expect(
       formatCountdown(
-        const Duration(days: 13, hours: 4, minutes: 12, seconds: 33),
+        const Duration(days: 11, hours: 4, minutes: 24, seconds: 53),
       ),
-      '13d 04:12:33',
+      '11 days',
     );
+    expect(formatCountdown(const Duration(days: 1, hours: 2)), '1 day');
+    // Under a day: HH:mm:ss only.
     expect(formatCountdown(const Duration(hours: 5)), '05:00:00');
+    expect(
+      formatCountdown(
+        const Duration(hours: 14, minutes: 22, seconds: 31),
+      ),
+      '14:22:31',
+    );
     expect(formatCountdown(const Duration(seconds: 90)), '00:01:30');
     expect(formatCountdown(Duration.zero), 'expired');
     expect(formatCountdown(const Duration(seconds: -5)), 'expired');
@@ -231,5 +245,48 @@ void main() {
     expect(ZteClient.expiryWindowDays('Annual pack'), 365);
     expect(ZteClient.expiryWindowDays('Airtel NG'), 30);
     expect(ZteClient.expiryWindowDays(''), 30);
+  });
+
+  test('Balance USSD is carrier-aware (MTN *323*4#, Airtel *323*1#)', () {
+    expect(ZteClient.balanceUssdForProvider('MTN NG'), '*323*4#');
+    expect(ZteClient.balanceUssdForProvider('mtn ng'), '*323*4#');
+    expect(ZteClient.balanceUssdForProvider('62130'), '*323*4#');
+    expect(ZteClient.balanceUssdForProvider('Airtel NG'), '*323*1#');
+    expect(ZteClient.balanceUssdForProvider('62120'), '*323*1#');
+    expect(ZteClient.balanceUssdForProvider(''), '*323*1#');
+  });
+
+  test('Overall signal score averages reported bands, ignores gaps', () {
+    SignalSample at({int? rsrp, int? rsrq, int? sinr}) => SignalSample(
+      at: DateTime(2026, 1, 1),
+      rsrp: rsrp,
+      rsrq: rsrq,
+      sinr: sinr,
+    );
+    // -81 RSRP = 4? No: >= -80 is 5, so -81 scores 4; -8 RSRQ scores 5;
+    // 15 SINR scores 4 → mean 13/3.
+    expect(
+      signalOverallScore(at(rsrp: -81, rsrq: -8, sinr: 15)),
+      closeTo(13 / 3, 0.001),
+    );
+    // Missing bands never drag the average: single metric stands alone.
+    expect(signalOverallScore(at(rsrp: -95)), 3.0);
+    expect(signalOverallScore(at()), isNull);
+    expect(overallLabel(5.0), 'Excellent');
+    expect(overallLabel(4.0), 'Good');
+    expect(overallLabel(3.0), 'Fair');
+    expect(overallLabel(1.0), 'Poor');
+    expect(overallLabel(null), 'Waiting');
+  });
+
+  test('Speed test math: median + throughput', () {
+    expect(medianOf([3.0]), 3.0);
+    expect(medianOf([1.0, 3.0, 2.0]), 2.0);
+    expect(medianOf([1.0, 2.0, 3.0, 4.0]), 2.5);
+    expect(() => medianOf([]), throwsArgumentError);
+    expect(throughputBps(1024, 1.0), 1024.0);
+    expect(throughputBps(512, 0.5), 1024.0);
+    expect(throughputBps(512, 0), 0);
+    expect(throughputBps(512, -1), 0);
   });
 }

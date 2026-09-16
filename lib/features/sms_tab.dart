@@ -33,9 +33,11 @@ class _SmsTabState extends State<SmsTab> {
   bool _busy = false;
 
   // Selection + view state (SSOT: one set drives everything).
+  // Groups start collapsed (retracted) — the inbox opens as a clean
+  // sender list; tapping a sender expands its messages.
   bool _selecting = false;
   final Set<String> _selected = {};
-  final Set<String> _collapsed = {};
+  final Set<String> _expanded = {};
   final Set<String> _showAll = {}; // senders expanded past the cap
   String _search = '';
   bool _unreadOnly = false;
@@ -140,20 +142,6 @@ class _SmsTabState extends State<SmsTab> {
       _selected.removeAll(ids);
       if (_selected.isEmpty) _selecting = false;
     });
-  }
-
-  Future<void> _bulkDelete() async {
-    if (_selected.isEmpty) return;
-    final ids = _selected.toList();
-    final ok = await confirmAction(
-      context,
-      icon: Icons.delete_outline,
-      title: 'Delete ${ids.length} message${ids.length == 1 ? '' : 's'}?',
-      message:
-          'They are removed from the ${_store == 1 ? 'device' : 'SIM'} store. This cannot be undone.',
-      confirmLabel: 'Delete',
-    );
-    if (ok) _deleteIds(ids, '${ids.length} SMS');
   }
 
   Future<void> _deleteGroup(String sender, List<SmsMessage> msgs) async {
@@ -302,13 +290,13 @@ class _SmsTabState extends State<SmsTab> {
     return SenderGroup(
       sender: sender,
       msgs: msgs,
-      collapsed: _collapsed.contains(sender),
+      collapsed: !_expanded.contains(sender),
       showAll: _showAll.contains(sender),
       selecting: _selecting,
       selected: _selected,
       busy: _busy,
       onToggleCollapse: () => setState(() {
-        if (!_collapsed.remove(sender)) _collapsed.add(sender);
+        if (!_expanded.remove(sender)) _expanded.add(sender);
       }),
       onToggleShowAll: () => setState(() {
         if (!_showAll.remove(sender)) _showAll.add(sender);
@@ -354,7 +342,10 @@ class _SmsTabState extends State<SmsTab> {
     final filtered = _filtered;
     final groups = groupSmsBySender(filtered);
     final unreadTotal = _msgs.where((m) => m.isNew).length;
-    final anyOpen = groups.any((g) => !_collapsed.contains(g.key));
+    final anyOpen = groups.any((g) => _expanded.contains(g.key));
+    final allIds = filtered.map((m) => m.id).toSet();
+    final allPicked =
+        allIds.isNotEmpty && _selected.containsAll(allIds);
 
     Widget inboxHeader() => SmsInboxHeader(
       selectedCount: _selected.length,
@@ -364,7 +355,7 @@ class _SmsTabState extends State<SmsTab> {
       capLine: capLine,
       searchCtrl: _searchCtrl,
       search: _search,
-      bulkVisible: _selecting || _selected.isNotEmpty,
+      allSelected: allPicked,
       onMarkAllRead: _markAllRead,
       onRefresh: _load,
       onStoreChanged: (v) {
@@ -372,7 +363,7 @@ class _SmsTabState extends State<SmsTab> {
           _store = v;
           _selecting = false;
           _selected.clear();
-          _collapsed.clear();
+          _expanded.clear();
           _showAll.clear();
         });
         _load();
@@ -382,17 +373,17 @@ class _SmsTabState extends State<SmsTab> {
         _searchCtrl.clear();
         setState(() => _search = '');
       },
-      onSelectAll: () => setState(() {
-        _selected
-          ..clear()
-          ..addAll(filtered.map((m) => m.id));
+      // One toggle: all filtered picked → clear; otherwise pick all.
+      // Per-group checkboxes + per-group delete do the rest — no bar.
+      onToggleSelectAll: () => setState(() {
+        if (allPicked) {
+          _selected.clear();
+          _selecting = false;
+        } else {
+          _selecting = true;
+          _selected.addAll(allIds);
+        }
       }),
-      onSelectNone: () => setState(() {
-        _selected.clear();
-        _selecting = false;
-      }),
-      onMarkReadSelected: () => _markReadIds(_selected.toList()),
-      onBulkDelete: _bulkDelete,
     );
 
     Widget inboxList() => SmsInboxList(
@@ -406,9 +397,9 @@ class _SmsTabState extends State<SmsTab> {
       collapseLabel: anyOpen ? 'collapse all' : 'expand all',
       onToggleCollapseAll: () => setState(() {
         // Toggle: collapse all if any expanded, else expand.
-        _collapsed.clear();
-        if (anyOpen) {
-          _collapsed.addAll(groups.map((g) => g.key));
+        _expanded.clear();
+        if (!anyOpen) {
+          _expanded.addAll(groups.map((g) => g.key));
         }
       }),
       groupBuilder: _group,

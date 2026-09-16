@@ -1,10 +1,12 @@
 library;
 
 /// Status-tab data-balance presentation (SSOT): snapshot section with
-/// bundle rows, quota bars, expiry chips and the raw-reply expander.
-/// Stateless — [StatusTab] owns the snapshot lifecycle.
+/// bundle rows, quota bars, expiry chips and the relocated countdown
+/// pill. Stateless — [StatusTab] owns the snapshot lifecycle. Parsed
+/// results only — the raw modem reply lives exclusively in Settings.
 import 'package:flutter/material.dart';
 
+import '../core/expiry_widgets.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/zte_utils.dart';
@@ -17,12 +19,18 @@ class BalanceSection extends StatelessWidget {
   final bool connected;
   final VoidCallback? onRefresh;
 
+  /// Carrier-specific query code shown in hints (MTN *323*4#,
+  /// Airtel *323*1#). Purely informational — the dial itself lives in
+  /// [ZteClient.fetchDataBalance].
+  final String balanceCode;
+
   const BalanceSection({
     super.key,
     required this.balance,
     required this.busy,
     required this.connected,
     this.onRefresh,
+    this.balanceCode = '*323*1#',
   });
 
   @override
@@ -66,7 +74,7 @@ class BalanceSection extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : IconButton(
-                      tooltip: 'Re-check (*323*1#)',
+                      tooltip: 'Re-check ($balanceCode)',
                       padding: EdgeInsets.zero,
                       onPressed: (!connected || busy) ? null : onRefresh,
                       icon: Icon(Icons.refresh, color: c.accentText, size: 18),
@@ -80,7 +88,7 @@ class BalanceSection extends StatelessWidget {
               Expanded(
                 child: Text(
                   connected
-                      ? 'Dial *323*1# for the real balance.'
+                      ? 'Dial $balanceCode for the real balance.'
                       : 'Log in, then check the real balance.',
                   style: TextStyle(color: c.textSecondary, fontSize: 12.5),
                 ),
@@ -92,22 +100,45 @@ class BalanceSection extends StatelessWidget {
             ],
           )
         else if (b != null) ...[
-          Text(
-            formatDataVolume(b.totalMb),
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 23,
-              fontWeight: FontWeight.w800,
-            ),
+          // Active total + remaining-time pill side by side: the
+          // countdown relocated here from the top header lives
+          // alongside the balance it describes.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        formatDataVolume(b.totalMb),
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: c.textPrimary,
+                          fontSize: 23,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      b.bundles.isEmpty
+                          ? 'could not parse — see Settings raw log'
+                          : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
+                      style: TextStyle(color: c.textMuted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              if (b.nextExpiry != null) ...[
+                const SizedBox(width: 8),
+                ExpiryDial(bundle: b.nextExpiry!, compact: true),
+              ],
+            ],
           ),
-          Text(
-            b.bundles.isEmpty
-                ? 'could not parse — raw reply below'
-                : 'left across ${b.bundles.length} bundle${b.bundles.length == 1 ? '' : 's'}',
-            style: TextStyle(color: c.textMuted, fontSize: 12),
-          ),
-          // Hero keeps total + bundles + raw only; the live countdown
-          // is the header fuse ring (main reads balanceFeed).
           for (final bundle in b.bundles)
             Opacity(
               // Exhausted bundles take less precedence: dimmed, last.
@@ -165,26 +196,8 @@ class BalanceSection extends StatelessWidget {
                 ),
               ),
             ),
-          // Raw reply: ground truth one tap away, no matter how
-          // the carrier rewords things next month.
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(
-              'Raw reply',
-              style: TextStyle(color: c.textMuted, fontSize: 12),
-            ),
-            children: [
-              SelectableText(
-                b.raw,
-                style: TextStyle(
-                  color: c.textSecondary,
-                  fontSize: 12,
-                  height: 1.5,
-                ),
-              ),
-            ],
-          ),
+          // Raw modem text lives exclusively in Settings (raw data log).
+          // Status stays parsed-only + glanceable.
         ],
       ],
     );

@@ -3,7 +3,9 @@ library;
 /// App bootstrap (SSOT): window/tray/notifications setup + [ZteApp].
 /// The dashboard shell lives in `dashboard.dart`.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -23,6 +25,13 @@ Future<void> main() async {
     await windowManager.setPreventClose(true);
     await windowManager.setTitle('MiFi Companion');
     await windowManager.setMinimumSize(const Size(1060, 700));
+  }
+
+  // Edge-to-edge on mobile: content draws under the transparent
+  // status bar (see [ZSystemUI]) instead of a solid system band.
+  // Desktop has no such chrome — skip it there.
+  if (!isDesktop) {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
   const initSettings = InitializationSettings(
@@ -53,17 +62,64 @@ Future<void> main() async {
     );
   }
 
-  runApp(const ZteApp());
+  // Restore the saved theme mode before the first frame (system | light | dark).
+  final prefs = await SharedPreferences.getInstance();
+  final saved = prefs.getString('theme_mode') ?? 'system';
+  final initial = switch (saved) {
+    'light' => ThemeMode.light,
+    'dark' => ThemeMode.dark,
+    _ => ThemeMode.system,
+  };
+
+  runApp(ZteApp(initialMode: initial));
 }
 
-class ZteApp extends StatelessWidget {
-  const ZteApp({super.key});
+class ZteApp extends StatefulWidget {
+  final ThemeMode initialMode;
+
+  const ZteApp({super.key, required this.initialMode});
+
+  /// Change the app-wide theme and persist the choice.
+  static void setThemeMode(BuildContext context, ThemeMode mode) {
+    final state = context.findAncestorStateOfType<_ZteAppState>();
+    state?._setMode(mode);
+  }
+
+  /// Current ThemeMode (for header toggle chips), or null when the
+  /// state is not mounted below [ZteApp].
+  static ThemeMode? maybeMode(BuildContext context) {
+    final state = context.findAncestorStateOfType<_ZteAppState>();
+    return state?._mode;
+  }
+
+  @override
+  State<ZteApp> createState() => _ZteAppState();
+}
+
+class _ZteAppState extends State<ZteApp> {
+  late ThemeMode _mode = widget.initialMode;
+
+  void _setMode(ThemeMode mode) {
+    setState(() => _mode = mode);
+    SharedPreferences.getInstance().then(
+      (p) => p.setString(
+        'theme_mode',
+        switch (mode) {
+          ThemeMode.light => 'light',
+          ThemeMode.dark => 'dark',
+          _ => 'system',
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MiFi Companion',
-      theme: buildZteTheme(),
+      theme: buildZteTheme(brightness: Brightness.light),
+      darkTheme: buildZteTheme(brightness: Brightness.dark),
+      themeMode: _mode,
       debugShowCheckedModeBanner: false,
       home: const DashboardPage(),
     );

@@ -103,7 +103,7 @@ class ConnectionPanel extends StatelessWidget {
                 child: SelectableText(
                   loginMessage,
                   style: TextStyle(
-                    color: loginOk == true ? c.live : const Color(0xFFFCA5A5),
+                    color: loginOk == true ? c.live : c.danger,
                     fontSize: 12,
                     height: 1.4,
                   ),
@@ -180,14 +180,14 @@ class DiagnosticsPanel extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF7C2D12).withAlpha(90),
+                color: c.danger.withAlpha(14),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFB923C).withAlpha(120)),
+                border: Border.all(color: c.danger.withAlpha(60)),
               ),
               child: Text(
                 'Unsupported on this firmware: ${unsupported.keys.join(', ')} — '
                 'not retried. See export for reasons.',
-                style: const TextStyle(color: Color(0xFFFDBA74), fontSize: 11.5),
+                style: TextStyle(color: c.danger, fontSize: 11.5),
               ),
             ),
           ],
@@ -201,11 +201,11 @@ class DiagnosticsPanel extends StatelessWidget {
                 : SingleChildScrollView(
                     child: SelectableText(
                       lines.join('\n'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Consolas',
                         fontSize: 11.5,
                         height: 1.55,
-                        color: Color(0xFFCBD5E1),
+                        color: c.textSecondary,
                       ),
                     ),
                   ),

@@ -102,11 +102,21 @@ class DataBundle {
   final double mb;
   final DateTime? expiry;
 
-  const DataBundle({required this.name, required this.mb, this.expiry});
+  /// The carrier's reply explicitly marked this allocation `(Expired)`.
+  /// Its remaining MB is dead volume: excluded from active totals.
+  final bool carrierExpired;
 
-  /// Out of quota: unexpired but empty. Shown dimmed + last, never
-  /// drives the countdown or alerts.
-  bool get exhausted => mb <= 0;
+  const DataBundle({
+    required this.name,
+    required this.mb,
+    this.expiry,
+    this.carrierExpired = false,
+  });
+
+  /// Out of quota: unexpired but empty, or marked (Expired) by the
+  /// carrier. Shown dimmed + last, never drives the countdown or
+  /// alerts, and never counts toward the active total.
+  bool get exhausted => mb <= 0 || carrierExpired;
 
   /// Days until expiry (negative = expired). Null when unknown.
   int? get daysLeft => expiry?.difference(DateTime.now()).inDays;
@@ -115,17 +125,20 @@ class DataBundle {
     'name': name,
     'mb': mb,
     'expiry': expiry?.toIso8601String(),
+    'carrierExpired': carrierExpired,
   };
 
   factory DataBundle.fromJson(Map<String, dynamic> j) => DataBundle(
     name: '${j['name'] ?? ''}',
     mb: (j['mb'] as num?)?.toDouble() ?? 0,
     expiry: j['expiry'] == null ? null : DateTime.tryParse('${j['expiry']}'),
+    carrierExpired: j['carrierExpired'] == true,
   );
 }
 
 /// Persisted data-balance snapshot: survives SMS deletion, app restarts,
-/// anything. Refreshed by dialing *323*1# (see [ZteClient.fetchDataBalance]).
+/// anything. Refreshed by dialing the carrier balance code
+/// (MTN *323*4#, Airtel *323*1# — see [ZteClient.fetchDataBalance]).
 class DataBalance {
   final List<DataBundle> bundles;
   final String raw;
@@ -137,7 +150,10 @@ class DataBalance {
     required this.fetchedAt,
   });
 
-  double get totalMb => bundles.fold(0, (a, b) => a + b.mb);
+  /// Active data only: carrier-marked (Expired) and empty bundles are
+  /// excluded — they are dead volume, not spendable balance.
+  double get totalMb =>
+      bundles.where((b) => !b.exhausted).fold(0, (a, b) => a + b.mb);
 
   /// Soonest-dated LIVE bundle still in the future (the one that
   /// matters). Exhausted bundles never qualify, even unexpired.

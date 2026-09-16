@@ -306,7 +306,7 @@ class _UssdTabState extends State<UssdTab> {
             width: double.infinity,
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.black.withAlpha(60),
+              color: c.chip,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: c.borderSubtle),
             ),

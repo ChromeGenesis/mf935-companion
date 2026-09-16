@@ -103,25 +103,29 @@ class _InfoTabState extends State<InfoTab> {
 
   Widget _miniStat(ZteColors c, String value, String caption) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
-        color: Colors.black.withAlpha(70),
+        color: c.chip,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: c.borderSubtle),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ),
           const SizedBox(height: 1),
@@ -320,29 +324,40 @@ class _InfoTabState extends State<InfoTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Header: label + refreshed stamp wrap under, so the Reset
+          // button can never be pushed off the right edge.
           Row(
             children: [
-              const SectionLabel('Traffic statistics'),
-              const Spacer(),
-              if (_updatedAt != null)
-                Text(
-                  'refreshed ${ZteClient.timeAgo(_updatedAt!)}',
-                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
-                ),
-              const SizedBox(width: 8),
+              const Expanded(child: SectionLabel('Traffic statistics')),
               TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
                 onPressed: _busy ? null : _resetCounter,
                 child: const Text('Reset counter'),
               ),
             ],
           ),
+          if (_updatedAt != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'refreshed ${ZteClient.timeAgo(_updatedAt!)}',
+                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+              ),
+            ),
           GridView.count(
             crossAxisCount: 2,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
-            childAspectRatio: 2.7,
+            // childAspectRatio derives the cell height from its width;
+            // tall enough that value + caption never paint an
+            // 11px bottom-overflow on big numbers.
+            childAspectRatio: 2.6,
             children: [
               _miniStat(c, ZteClient.formatDataVolume(rxMb), 'month down'),
               _miniStat(c, ZteClient.formatDataVolume(txMb), 'month up'),

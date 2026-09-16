@@ -73,6 +73,17 @@ String ussdFlagLabel(String flag) {
   }
 }
 
+/// Balance USSD per carrier: MTN answers data balance on *323*4#
+/// while Airtel (and unknown carriers) use *323*1#. Distinguishing the
+/// two avoids sending MTN users down Airtel's menu tree.
+String balanceUssdForProvider(String provider) {
+  final p = provider.trim().toLowerCase();
+  if (p.contains('mtn') || p == '62130' || p.contains('62130')) {
+    return '*323*4#';
+  }
+  return '*323*1#';
+}
+
 /// Priority layers (never blank — quota is guaranteed):
 /// 1. Structured bundles: `Name: 2.5GB till/expires <date>`.
 /// 2. No structure? Sum every `<amount> UNIT` in the reply as "Data
@@ -135,8 +146,9 @@ List<DataBundle> sortBundles(List<DataBundle> bundles) {
   return bundles;
 }
 
-/// Plan window in days inferred from the bundle name. Drives the header
-/// fuse ring only — never displayed as fact, the exact countdown is.
+/// Plan window in days inferred from the bundle name. Drives the
+/// dashboard countdown pill only — never displayed as fact, the exact
+/// countdown is.
 int expiryWindowDays(String name) {
   final n = name.toLowerCase();
   if (n.contains('daily')) return 1;
@@ -191,11 +203,18 @@ List<DataBundle> parseDataBundles(String text) {
         : unit == 'KB'
         ? amount / 1024
         : amount;
+    // Carriers append "(Expired)" after the amount for dead allocations
+    // (e.g. "YouTube Night: 1973.04MB (Expired)") — keep the row for
+    // transparency but exclude it from active totals.
+    final tailEnd = (m.end + 12).clamp(0, text.length);
+    final tail = text.substring(m.end, tailEnd).toLowerCase();
+    final carrierExpired = tail.contains('(expired)');
     out.add(
       DataBundle(
         name: (m.group(1) ?? '').trim(),
         mb: mb,
         expiry: parseModemDate(m.group(4)),
+        carrierExpired: carrierExpired,
       ),
     );
   }

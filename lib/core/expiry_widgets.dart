@@ -14,17 +14,17 @@ import 'models.dart';
 import 'theme.dart';
 import 'zte_utils.dart' as zu;
 
-/// "13d 04:12:33", "04:12:33" under a day, "expired" past zero.
+/// Remaining-time label: whole days only above 24h ("11 days"),
+/// HH:mm:ss only under a day ("14:22:31"), "expired" past zero.
 /// Pure + tested; [CountdownText] ticks it live.
 String formatCountdown(Duration left) {
   if (left.inSeconds <= 0) return 'expired';
   final d = left.inDays;
-  final h = left.inHours % 24;
+  if (d > 0) return '$d day${d == 1 ? '' : 's'}';
+  final h = left.inHours;
   final m = left.inMinutes % 60;
   final s = left.inSeconds % 60;
-  final clock =
-      '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-  return d > 0 ? '${d}d $clock' : clock;
+  return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
 }
 
 /// Self-ticking countdown to [target]. Owns its 1s timer and only ever
@@ -93,14 +93,14 @@ class _CountdownTextState extends State<CountdownText> {
   }
 }
 
-/// Fuse ring: radial countdown for the next-expiring bundle, living in
-/// the app header at title level. The ring burns down over the plan
-/// window inferred from the bundle name (daily/weekly/monthly); the
-/// exact numbers ride in the text + tooltip. Tap jumps to Status.
+/// Header remaining-time indicator for the next-expiring bundle:
+/// a clean pill with an hourglass glyph + "11 days" (or "14:22:31"
+/// under a day). Rendered inside the dashboard balance card alongside
+/// the active total (relocated from the top header). Tap jumps to Status.
 /// Self-ticking — rebuilds only itself, once a second.
 class ExpiryDial extends StatefulWidget {
   final DataBundle bundle;
-  final bool compact; // narrow screens: ring + time, no name
+  final bool compact; // narrow screens: no bundle name
   final VoidCallback? onTap;
 
   const ExpiryDial({
@@ -152,20 +152,16 @@ class _ExpiryDialState extends State<ExpiryDial> {
   Widget build(BuildContext context) {
     final c = context.zc;
     final b = widget.bundle;
-    final windowSecs = zu.expiryWindowDays(b.name) * 86400;
-    final frac = windowSecs <= 0
-        ? 0.0
-        : (_left.inSeconds / windowSecs).clamp(0.0, 1.0);
     final urgent = _left.inHours <= 48;
     final ring = urgent ? c.danger : c.accentText;
     return Tooltip(
       message:
-          '${b.name} · ${zu.formatDataVolume(b.mb)} left · ends ${formatCountdown(_left)}',
+          '${b.name} · ${zu.formatDataVolume(b.mb)} left · ends ${_left.inHours > 24 ? '${_left.inDays} days' : 'in ${formatCountdown(_left)}'}',
       child: InkWell(
         onTap: widget.onTap,
         borderRadius: BorderRadius.circular(99),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: c.surface.withAlpha(170),
             borderRadius: BorderRadius.circular(99),
@@ -174,52 +170,41 @@ class _ExpiryDialState extends State<ExpiryDial> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
-                width: 26,
-                height: 26,
-                child: Stack(
-                  alignment: Alignment.center,
+              Icon(Icons.hourglass_bottom, size: 13, color: ring),
+              const SizedBox(width: 6),
+              // Flexible text: the countdown shrinks/ellipsizes instead of
+              // pushing the header past the screen edge on narrow phones.
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      width: 26,
-                      height: 26,
-                      child: CircularProgressIndicator(
-                        value: frac,
-                        strokeWidth: 3,
-                        backgroundColor: c.textMuted.withAlpha(50),
-                        valueColor: AlwaysStoppedAnimation(ring),
-                        strokeCap: StrokeCap.round,
+                    if (!widget.compact)
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 110),
+                        child: Text(
+                          b.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                        ),
+                      ),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        formatCountdown(_left),
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: ring,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
-                    Icon(Icons.hourglass_bottom, size: 11, color: ring),
                   ],
                 ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!widget.compact)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 110),
-                      child: Text(
-                        b.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: c.textMuted, fontSize: 10.5),
-                      ),
-                    ),
-                  Text(
-                    formatCountdown(_left),
-                    style: TextStyle(
-                      color: ring,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
