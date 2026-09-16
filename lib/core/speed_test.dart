@@ -7,19 +7,28 @@
 /// the Wi-Fi link. Probing the gateway IP itself would only time the
 /// living-room hop — that number would look great and mean nothing.
 ///
-/// Methodology (distrust single shots):
+/// Why parallel streams (fast.com parity): one TCP stream on a
+/// high-latency mobile link cannot fill the pipe — the
+/// bandwidth-delay product caps it — and slow-start eats short
+/// transfers whole. fast.com opens many concurrent streams for many
+/// seconds for exactly this reason; a single 512 KiB fetch will
+/// always read ~2-3× low. So throughput runs N parallel streams and
+/// reports the peak sustained batch, while latency (where parallelism
+/// would lie) stays a median of sequential probes.
+///
+/// Methodology:
 /// - latency: one warmup probe (TLS + handshake, discarded), then the
-///   median of 4 RTTs — not the min, which flatters.
-/// - download: cache-busted 128 KiB warmup (discarded), then 2× 512 KiB
-///   runs, median reported. Slow-start dominates any single small
-///   transfer, so one run is noise.
-/// - upload: 2× 128 KiB POSTs with an explicit Content-Length (no
-///   chunked guessing), median reported.
+///   median of 4 sequential RTTs.
+/// - download: 256 KiB warmup (discarded), then 2 batches of
+///   4× 1 MiB parallel streams; peak batch reported.
+/// - upload: 128 KiB warmup, then 2 batches of 2× 256 KiB parallel
+///   POSTs with explicit Content-Length; peak batch reported.
 /// Every request carries the run's [CancelToken] — cancel actually
 /// aborts mid-transfer, not just at phase boundaries.
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 
@@ -44,10 +53,17 @@ class SpeedTestResult {
 }
 
 /// Payload sizes for the throughput probes. Totals per run:
-/// ~1.2 MB down (128 KiB warmup + 2× 512 KiB), ~0.25 MB up (2× 128 KiB).
-const _warmupDownloadBytes = 128 * 1024;
-const _downloadBytes = 512 * 1024; // 512 KiB per measured run
-const _uploadBytes = 128 * 1024; // 128 KiB per measured run (mobile-friendly)
+/// ~8.5 MB down (256 KiB warmup + 2 batches of 4× 1 MiB),
+/// ~1.1 MB up (128 KiB warmup + 2 batches of 2× 256 KiB).
+/// A fast.com-class number costs fast.com-class bytes — the consent
+/// dialog states this plainly before the first run.
+const _warmupDownloadBytes = 256 * 1024;
+const _batchConnsDown = 4;
+const _batchBytesDown = 1024 * 1024; // 1 MiB per stream
+const _warmupUploadBytes = 128 * 1024;
+const _batchConnsUp = 2;
+const _batchBytesUp = 256 * 1024;
+const _batches = 2;
 
 /// Median of a non-empty sample (sorted middle / mean of two middles).
 /// Pure + tested — every reported number in a run goes through this.
@@ -65,6 +81,11 @@ double throughputBps(int bytes, double elapsedSeconds) {
   return bytes / elapsedSeconds;
 }
 
+/// Aggregate throughput of one parallel batch: summed stream bytes
+/// over the shared wall-clock. Pure + tested.
+double batchThroughputBps(List<int> connBytes, double wallSeconds) =>
+    throughputBps(connBytes.fold<int>(0, (a, b) => a + b), wallSeconds);
+
 /// Runs a compact speed test in phases with progress callbacks.
 /// Cancel at any point via [cancel] — probes stop at phase boundaries
 /// and within long transfers via [Dio] request cancellation.
@@ -72,8 +93,10 @@ class SpeedTestRunner {
   final _dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 6),
-      receiveTimeout: const Duration(seconds: 20),
-      sendTimeout: const Duration(seconds: 20),
+      // Parallel MiB-scale batches on slow links need room; the user
+      // can always cancel, which aborts mid-transfer via the token.
+      receiveTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(seconds: 60),
       responseType: ResponseType.bytes,
     ),
   );
@@ -114,44 +137,44 @@ class SpeedTestRunner {
       }
       latencyMs = medianOf(rtts);
 
-      // ── Download: warmup (slow-start, discarded) + median of 2.
+      // ── Download: warmup (slow-start, discarded) + peak of 2
+      // parallel batches.
       onPhase(SpeedPhase.download, 0);
-      await _downloadRun(
-        _warmupDownloadBytes,
-        (p) => onPhase(SpeedPhase.download, p * 0.2),
-      );
+      await _downloadConn(_warmupDownloadBytes, 0, (_, _) {});
+      onPhase(SpeedPhase.download, 0.05);
       final downs = <double>[];
-      downs.add(
-        await _downloadRun(
-          _downloadBytes,
-          (p) => onPhase(SpeedPhase.download, 0.2 + p * 0.4),
-        ),
-      );
-      downs.add(
-        await _downloadRun(
-          _downloadBytes,
-          (p) => onPhase(SpeedPhase.download, 0.6 + p * 0.4),
-        ),
-      );
-      downBps = medianOf(downs);
+      for (var b = 0; b < _batches; b++) {
+        downs.add(
+          await _parallelDown(
+            conns: _batchConnsDown,
+            bytesEach: _batchBytesDown,
+            salt: b,
+            onProgress: (p) =>
+                onPhase(SpeedPhase.download, 0.05 + ((b + p) / _batches) * 0.95),
+          ),
+        );
+      }
+      downBps = downs.reduce(max);
 
-      // ── Upload: median of 2 explicit-length POSTs.
+      // ── Upload: warmup + peak of 2 parallel batches, explicit
+      // Content-Length on every POST.
       onPhase(SpeedPhase.upload, 0);
-      final payload = List.filled(_uploadBytes, 65); // 'A'
+      final payload = List.filled(_batchBytesUp, 65); // 'A'
+      await _uploadConn(List.filled(_warmupUploadBytes, 65), -1, (_, _) {});
+      onPhase(SpeedPhase.upload, 0.05);
       final ups = <double>[];
-      ups.add(
-        await _uploadRun(
-          payload,
-          (p) => onPhase(SpeedPhase.upload, p * 0.5),
-        ),
-      );
-      ups.add(
-        await _uploadRun(
-          payload,
-          (p) => onPhase(SpeedPhase.upload, 0.5 + p * 0.5),
-        ),
-      );
-      upBps = medianOf(ups);
+      for (var b = 0; b < _batches; b++) {
+        ups.add(
+          await _parallelUp(
+            conns: _batchConnsUp,
+            payload: payload,
+            salt: b,
+            onProgress: (p) =>
+                onPhase(SpeedPhase.upload, 0.05 + ((b + p) / _batches) * 0.95),
+          ),
+        );
+      }
+      upBps = ups.reduce(max);
 
       onPhase(SpeedPhase.done, 1);
       return SpeedTestResult(
@@ -199,42 +222,98 @@ class SpeedTestRunner {
     return sw.elapsedMicroseconds / 1000;
   }
 
-  /// One download run: cache-busted fetch of exactly [bytes], returns
-  /// measured bytes/sec. Throws on an empty body (proxy answered
-  /// without content) so a bogus run never reports.
-  Future<double> _downloadRun(
-    int bytes,
-    void Function(double progress) onProgress,
-  ) async {
+  /// One parallel download batch: [conns] concurrent streams of
+  /// [bytesEach], returns summed bytes over shared wall-clock.
+  /// Progress aggregates across streams so the bar stays truthful.
+  Future<double> _parallelDown({
+    required int conns,
+    required int bytesEach,
+    required int salt,
+    required void Function(double progress) onProgress,
+  }) async {
+    final done = List<int>.filled(conns, 0);
+    final totals = List<int>.filled(conns, bytesEach);
+    void report() {
+      final t = totals.fold<int>(0, (a, b) => a + b);
+      if (t > 0) {
+        onProgress(done.fold<int>(0, (a, b) => a + b) / t);
+      }
+    }
+
     final sw = Stopwatch()..start();
+    final results = await Future.wait<int>([
+      for (var i = 0; i < conns; i++)
+        _downloadConn(bytesEach, salt * 97 + i, (d, t) {
+          done[i] = d;
+          if (t > 0) totals[i] = t;
+          report();
+        }),
+    ]);
+    sw.stop();
+    return batchThroughputBps(results, sw.elapsedMicroseconds / 1e6);
+  }
+
+  /// One download stream: cache-busted fetch of exactly [bytes].
+  /// Throws on an empty body (proxy answered without content) so a
+  /// bogus stream never reports.
+  Future<int> _downloadConn(
+    int bytes,
+    int salt,
+    void Function(int done, int total) onChunk,
+  ) async {
     final resp = await _dio.get<List<int>>(
       'https://speed.cloudflare.com/__down',
       queryParameters: {
         'bytes': bytes,
-        '_': DateTime.now().millisecondsSinceEpoch,
+        '_': '${DateTime.now().millisecondsSinceEpoch}$salt',
       },
       cancelToken: _cancel,
-      onReceiveProgress: (done, total) {
-        if (total > 0) onProgress(done / total);
-      },
+      onReceiveProgress: (d, t) => onChunk(d, t),
     );
-    sw.stop();
     final got = resp.data?.length ?? 0;
     if (got == 0) throw const FormatException('empty download body');
-    return throughputBps(got, sw.elapsedMicroseconds / 1e6);
+    return got;
   }
 
-  /// One upload run: POST [payload] with an explicit Content-Length
-  /// (no chunked-transfer guessing), returns measured bytes/sec.
-  Future<double> _uploadRun(
-    List<int> payload,
-    void Function(double progress) onProgress,
-  ) async {
+  /// One parallel upload batch: [conns] concurrent POSTs of [payload].
+  Future<double> _parallelUp({
+    required int conns,
+    required List<int> payload,
+    required int salt,
+    required void Function(double progress) onProgress,
+  }) async {
+    final done = List<int>.filled(conns, 0);
+    void report() {
+      final t = payload.length * conns;
+      onProgress(done.fold<int>(0, (a, b) => a + b) / t);
+    }
+
     final sw = Stopwatch()..start();
+    await Future.wait<void>([
+      for (var i = 0; i < conns; i++)
+        _uploadConn(payload, salt * 97 + i, (d, _) {
+          done[i] = d;
+          report();
+        }),
+    ]);
+    sw.stop();
+    return batchThroughputBps(
+      List.filled(conns, payload.length),
+      sw.elapsedMicroseconds / 1e6,
+    );
+  }
+
+  /// One upload stream: POST [payload] with an explicit Content-Length
+  /// (no chunked-transfer guessing). Returns bytes sent.
+  Future<int> _uploadConn(
+    List<int> payload,
+    int salt,
+    void Function(int done, int total) onChunk,
+  ) async {
     await _dio.post<void>(
       'https://speed.cloudflare.com/__up',
       data: payload,
-      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch},
+      queryParameters: {'_': '${DateTime.now().millisecondsSinceEpoch}$salt'},
       options: Options(
         headers: {
           'Content-Type': 'application/octet-stream',
@@ -242,12 +321,9 @@ class SpeedTestRunner {
         },
       ),
       cancelToken: _cancel,
-      onSendProgress: (done, total) {
-        if (total > 0) onProgress(done / total);
-      },
+      onSendProgress: (d, t) => onChunk(d, t),
     );
-    sw.stop();
-    return throughputBps(payload.length, sw.elapsedMicroseconds / 1e6);
+    return payload.length;
   }
 
   /// Cancel the in-flight test (no-op when idle).

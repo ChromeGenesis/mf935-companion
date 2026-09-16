@@ -279,8 +279,7 @@ void main() {
     expect(overallLabel(null), 'Waiting');
   });
 
-  test('Speed test math: median + throughput', () {
-    expect(medianOf([3.0]), 3.0);
+  test('Speed test math: median + throughput', () {    expect(medianOf([3.0]), 3.0);
     expect(medianOf([1.0, 3.0, 2.0]), 2.0);
     expect(medianOf([1.0, 2.0, 3.0, 4.0]), 2.5);
     expect(() => medianOf([]), throwsArgumentError);
@@ -288,5 +287,34 @@ void main() {
     expect(throughputBps(512, 0.5), 1024.0);
     expect(throughputBps(512, 0), 0);
     expect(throughputBps(512, -1), 0);
+    // Parallel batch: summed streams over shared wall-clock.
+    expect(batchThroughputBps([512, 512], 1.0), 1024.0);
+    expect(batchThroughputBps([1024, 1024, 1024, 1024], 2.0), 2048.0);
+    expect(batchThroughputBps([], 1.0), 0);
+    expect(batchThroughputBps([512], 0), 0);
+  });
+
+  test('SMS auto-clean: usage parsing + oldest-first ids', () {
+    const cap = {
+      'sms_nv_rev_total': '82',
+      'sms_nv_total': '100',
+      'sms_sim_rev_total': '3',
+      'sms_sim_total': '50',
+    };
+    expect(smsStoreUsage(cap, 1), (82, 100));
+    expect(smsStoreUsage(cap, 0), (3, 50));
+    expect(smsStoreUsage({}, 1), (0, 0));
+    SmsMessage m(String id) => SmsMessage(
+      id: id,
+      number: 'x',
+      content: 'y',
+      tag: '0',
+      date: '',
+      draftGroupId: '',
+    );
+    final msgs = [m('9'), m('3'), m('7'), m('1')];
+    expect(oldestSmsIds(msgs, 2), ['1', '3']);
+    expect(oldestSmsIds(msgs, 99).length, 4);
+    expect(oldestSmsIds([], 50), isEmpty);
   });
 }

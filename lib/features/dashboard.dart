@@ -481,7 +481,12 @@ class _DashboardPageState extends State<DashboardPage>
     // status + system bars (both transparent via edge-to-edge).
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: ZSystemUI.overlay(context),
+      // extendBody: the ambient background paints edge-to-edge behind
+      // the floating dock — no flat Scaffold strip shows around it in
+      // any theme. Tab scrolls carry bottom clearance so last rows
+      // never hide under the pill.
       child: Scaffold(
+      extendBody: true,
       body: AmbientBackground(
         child: _shell(
           Padding(
@@ -491,7 +496,10 @@ class _DashboardPageState extends State<DashboardPage>
               headerSliverBuilder: (ctx, innerScrolled) =>
                   [const ZSliverHeader()],
               body: Padding(
-                padding: const EdgeInsets.only(top: 8),
+                padding: EdgeInsets.only(
+                  top: 8,
+                  bottom: _narrow ? 88 : 0,
+                ),
                 child: IndexedStack(index: _tab, children: _tabBodies()),
               ),
             ),

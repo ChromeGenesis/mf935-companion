@@ -239,6 +239,33 @@ DateTime? parseModemDate(String? s) {
   );
 }
 
+/// SMS store usage from the modem capacity map: (used, total) for
+/// [store] (1 = device, 0 = SIM). Zeros when the firmware reports
+/// nothing — callers treat total <= 0 as unknown, never as full.
+/// Pure + tested.
+(int used, int total) smsStoreUsage(
+  Map<String, dynamic> capacity,
+  int store,
+) {
+  int num(String k) => int.tryParse('${capacity[k] ?? ''}') ?? 0;
+  if (store == 1) {
+    return (num('sms_nv_rev_total'), num('sms_nv_total'));
+  }
+  return (num('sms_sim_rev_total'), num('sms_sim_total'));
+}
+
+/// Ids of the [n] oldest messages (numeric id ascending — the modem
+/// hands ids out in arrival order). Pure + tested; drives auto-clean.
+List<String> oldestSmsIds(List<SmsMessage> msgs, int n) {
+  final sorted = [...msgs]..sort((a, b) {
+    final ai = int.tryParse(a.id);
+    final bi = int.tryParse(b.id);
+    if (ai != null && bi != null) return ai.compareTo(bi);
+    return a.id.compareTo(b.id);
+  });
+  return sorted.take(n).map((m) => m.id).toList();
+}
+
 /// "5m ago", "2h ago", "3d ago" for snapshot freshness labels.
 String timeAgo(DateTime t) {
   final d = DateTime.now().difference(t);

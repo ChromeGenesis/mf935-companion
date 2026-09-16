@@ -181,6 +181,8 @@ class SmsInboxList extends StatelessWidget {
   final bool hasFilter;
   final bool unreadOnly;
   final ValueChanged<bool> onUnreadOnlyChanged;
+  final bool autoClean;
+  final ValueChanged<bool> onAutoCleanChanged;
   final List<MapEntry<String, List<SmsMessage>>> groups;
   final int filteredCount;
   final String collapseLabel;
@@ -194,6 +196,8 @@ class SmsInboxList extends StatelessWidget {
     required this.hasFilter,
     required this.unreadOnly,
     required this.onUnreadOnlyChanged,
+    required this.autoClean,
+    required this.onAutoCleanChanged,
     required this.groups,
     required this.filteredCount,
     required this.collapseLabel,
@@ -231,6 +235,18 @@ class SmsInboxList extends StatelessWidget {
               selected: unreadOnly,
               visualDensity: VisualDensity.compact,
               onSelected: onUnreadOnlyChanged,
+            ),
+            const SizedBox(width: 8),
+            Tooltip(
+              message: autoClean
+                  ? 'Auto-clean on: at 80% full the 50 oldest go'
+                  : 'Auto-clean off: a full store blocks new messages',
+              child: FilterChip(
+                label: const Text('Auto-clean', style: TextStyle(fontSize: 12)),
+                selected: autoClean,
+                visualDensity: VisualDensity.compact,
+                onSelected: onAutoCleanChanged,
+              ),
             ),
             const SizedBox(width: 10),
             Flexible(

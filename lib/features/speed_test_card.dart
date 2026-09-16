@@ -53,9 +53,10 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
         title: 'Run a speed test?',
         danger: false,
         message:
-            'The test downloads ~1.2 MB and uploads ~0.3 MB through your '
-            'carrier data. Each phase runs more than once and the median '
-            'is reported — it never runs automatically in the background.',
+            'The test uses about 10 MB of carrier data (downloads ~9 MB, '
+            'uploads ~1 MB). It runs parallel streams like fast.com and '
+            'reports the peak sustained rate — never automatically in '
+            'the background.',
         confirmLabel: 'Run test',
       );
       if (!ok) return;
@@ -234,8 +235,8 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Latency + download + upload through the carrier, median '
-                'of repeated runs. Uses real data — run sparingly.',
+                'Parallel streams through the carrier, peak sustained '
+                'rate like fast.com. Uses real data — run sparingly.',
                 style: TextStyle(color: c.textMuted, fontSize: 11.5),
               ),
             ),

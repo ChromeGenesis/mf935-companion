@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'sms_group.dart';
 import 'sms_panels.dart';
@@ -42,6 +43,12 @@ class _SmsTabState extends State<SmsTab> {
   String _search = '';
   bool _unreadOnly = false;
 
+  // Auto-clean: when the active store hits 80%, the 50 oldest go so
+  // new arrivals are never blocked. Opt-out via the inbox chip.
+  bool _autoClean = true;
+  bool _purging = false;
+  String _lastPurgeKey = '';
+
   final _numCtrl = TextEditingController();
   final _textCtrl = TextEditingController();
   final _centerCtrl = TextEditingController();
@@ -52,6 +59,7 @@ class _SmsTabState extends State<SmsTab> {
   @override
   void initState() {
     super.initState();
+    _loadAutoClean();
     if (widget.connected) _load();
   }
 
@@ -68,6 +76,25 @@ class _SmsTabState extends State<SmsTab> {
     _centerCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadAutoClean() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() => _autoClean = prefs.getBool('sms_autoclean') ?? true);
+    } catch (_) {
+      // Prefs unavailable — stay on the safe default (clean on).
+    }
+  }
+
+  Future<void> _setAutoClean(bool v) async {
+    setState(() => _autoClean = v);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('sms_autoclean', v);
+    } catch (_) {}
+    widget.log(v ? 'auto-clean on: oldest 50 go at 80% full' : 'auto-clean off');
   }
 
   Future<void> _load() async {
@@ -96,6 +123,40 @@ class _SmsTabState extends State<SmsTab> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (mounted) _maybeAutoPurge();
+  }
+
+  /// Auto-clean: the modem stops receiving into a full store, so at
+  /// 80% the 50 oldest messages go (one attempt per usage level — a
+  /// failed delete never loops). Runs after every load; a successful
+  /// purge reloads so counts settle below the line.
+  Future<void> _maybeAutoPurge() async {
+    if (!_autoClean || _purging || !widget.connected || _busy) return;
+    final (used, total) = smsStoreUsage(_capacity, _store);
+    if (total <= 0 || used / total < 0.8) return;
+    final key = '$_store|$used|$total';
+    if (key == _lastPurgeKey) return; // already tried this level
+    _lastPurgeKey = key;
+    final victims = oldestSmsIds(_msgs, 50);
+    if (victims.isEmpty) return;
+    _purging = true;
+    try {
+      final ok = await widget.client.deleteSms(victims);
+      widget.log(
+        ok
+            ? 'auto-clean: store $used/$total — removed ${victims.length} oldest'
+            : formatCommandFailure(
+                command: 'DELETE_SMS',
+                result: 'error',
+                next: 'Free inbox space by hand — the store is nearly full.',
+              ),
+      );
+    } catch (e) {
+      widget.log('auto-clean failed: $e');
+    } finally {
+      _purging = false;
+    }
+    _load();
   }
 
   /// Messages after search + unread filters.
@@ -392,6 +453,8 @@ class _SmsTabState extends State<SmsTab> {
       hasFilter: _search.isNotEmpty || _unreadOnly,
       unreadOnly: _unreadOnly,
       onUnreadOnlyChanged: (v) => setState(() => _unreadOnly = v),
+      autoClean: _autoClean,
+      onAutoCleanChanged: _setAutoClean,
       groups: groups,
       filteredCount: filtered.length,
       collapseLabel: anyOpen ? 'collapse all' : 'expand all',
