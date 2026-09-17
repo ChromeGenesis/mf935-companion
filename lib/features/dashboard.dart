@@ -16,6 +16,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/poller.dart';
 import '../core/capability.dart';
+import '../core/device_store.dart';
 import '../core/diagnostics.dart';
 import '../core/platform.dart';
 import '../core/signal_locator.dart';
@@ -374,8 +375,26 @@ class _DashboardPageState extends State<DashboardPage>
         _smartTick(s);
       },
       onUnreachable: _smartUnreachable,
+      onDevices: _deviceTick,
     )..start();
     _logLine('poller started (30s) — minimize to tray to keep polling');
+  }
+
+  /// Fold background station snapshots into device intel (fire-and-
+  /// forget; merges are cheap, prefs writes are not awaited by polls).
+  Future<void> _deviceTick(List<AttachedDevice> stations) async {
+    try {
+      final store = await DeviceStore.load();
+      final merged = store.merge(stations);
+      await merged.store.save();
+      for (final e in merged.events.where((e) => !e.joined)) {
+        final dev = merged.store.known[e.mac];
+        if (dev != null && dev.important) {
+          _logLine('important device left: ${e.name}');
+          await _notifyNow('MiFi device left', '${e.name} disconnected.');
+        }
+      }
+    } catch (_) {}
   }
 
   /// Feed one successful poll into the smart-alert engine and raise
@@ -495,6 +514,7 @@ class _DashboardPageState extends State<DashboardPage>
       balanceRawLog: _balanceRawLog,
       onClearBalanceLog: () => setState(() => _balanceRawLog.clear()),
       log: _logLine,
+      notify: _notifyNow,
       onUnsupported: _markUnsupported,
     ),
   ];

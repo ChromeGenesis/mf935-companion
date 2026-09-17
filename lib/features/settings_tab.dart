@@ -14,6 +14,7 @@ import '../core/widgets.dart';
 import '../core/zte_client.dart';
 import '../main.dart' show ZteApp;
 import 'dashboard_panels.dart';
+import 'device_intel_card.dart';
 import 'smart_alerts_card.dart';
 import 'status_devices.dart';
 
@@ -44,6 +45,9 @@ class SettingsTab extends StatefulWidget {
 
   final void Function(String) log;
 
+  /// Route a native toast (dashboard-owned).
+  final Future<void> Function(String title, String body) notify;
+
   /// Report a firmware rejection once so the shell can latch it in the
   /// capability matrix instead of retrying.
   final void Function(String goformId, String reason)? onUnsupported;
@@ -67,6 +71,7 @@ class SettingsTab extends StatefulWidget {
     required this.balanceRawLog,
     required this.onClearBalanceLog,
     required this.log,
+    required this.notify,
     this.unsupported = const {},
     this.onUnsupported,
   });
@@ -261,6 +266,12 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
           );
           const appearance = _AppearanceCard();
+          final intel = DeviceIntelCard(
+            client: widget.client,
+            connected: widget.connected,
+            log: widget.log,
+            notify: widget.notify,
+          );
 
           if (wide) {
             return Column(
@@ -283,6 +294,8 @@ class _SettingsTabState extends State<SettingsTab> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                SizedBox(width: double.infinity, child: intel),
                 const SizedBox(height: 10),
                 const SizedBox(
                   width: double.infinity,
@@ -311,6 +324,8 @@ class _SettingsTabState extends State<SettingsTab> {
               power,
               const SizedBox(height: 10),
               const SmartAlertsCard(),
+              const SizedBox(height: 10),
+              intel,
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),

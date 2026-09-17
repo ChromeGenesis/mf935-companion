@@ -21,6 +21,7 @@ class ZtePoller {
     this.lowDataMb,
     this.onStatus,
     this.onUnreachable,
+    this.onDevices,
   });
 
   final ZteClient _client;
@@ -34,6 +35,10 @@ class ZtePoller {
   /// escalation as the toast) so smart-alert engines can record the
   /// outage window. Recovery is visible via the next [onStatus].
   void Function()? onUnreachable;
+
+  /// Station snapshots for device intelligence, every 10th tick
+  /// (~5 min, offset from the SMS-capacity probe to spread load).
+  void Function(List<AttachedDevice> stations)? onDevices;
 
   Timer? _timer;
   int _tickCount = 0;
@@ -153,6 +158,17 @@ class ZtePoller {
             'Used ${usedMb.toStringAsFixed(0)} MB this month.');
       } else if (usedMb < lowDataMb!) {
         _lowDataNotified = false;
+      }
+    }
+
+    // Station snapshot for device intel: every 10th tick (~5 min),
+    // offset from the SMS-capacity probe to spread firmware load.
+    if (_tickCount % 10 == 5) {
+      try {
+        final stations = await _client.getConnectedDevices();
+        onDevices?.call(stations);
+      } catch (_) {
+        // Best-effort; next window retries.
       }
     }
 

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
+import 'package:zte_mf935_app/core/device_store.dart';
 import 'package:zte_mf935_app/core/ndt7_client.dart';
 import 'package:zte_mf935_app/core/signal_locator.dart';
 import 'package:zte_mf935_app/core/smart_alerts.dart';
@@ -555,5 +556,44 @@ void main() {
     );
     expect(back2.length, 1);
     expect(back2.first.title, ok.title);
+  });
+
+  test('Device store: joins, two-miss leaves, names, decode', () {
+    AttachedDevice dev(String mac, [String host = 'h']) => AttachedDevice(
+      mac: mac,
+      hostname: host,
+      ip: '192.168.0.2',
+    );
+    final t0 = DateTime(2026, 1, 1, 12, 0);
+    var m = const DeviceStore().merge(
+      [dev('AA', 'laptop')],
+      now: t0,
+    );
+    expect(m.events.length, 1);
+    expect(m.events.first.joined, isTrue);
+    expect(m.store.present().length, 1);
+
+    // One missed snapshot: still present (flap grace), no event.
+    m = m.store.merge([], now: t0.add(const Duration(minutes: 5)));
+    expect(m.events, isEmpty);
+    expect(m.store.present().length, 1);
+
+    // Second miss: left event fires.
+    m = m.store.merge([], now: t0.add(const Duration(minutes: 10)));
+    expect(m.events.length, 1);
+    expect(m.events.first.joined, isFalse);
+    expect(m.store.present(), isEmpty);
+
+    // Rename + star persist through copyWith and round-trip.
+    final d = m.store.known['AA']!;
+    final named = d.copyWith(customName: 'Work laptop', important: true);
+    expect(named.displayName('laptop'), 'Work laptop');
+    var store = m.store.withDevice(named);
+    final back3 = DeviceStore.decode(jsonEncode(store.toJson()));
+    expect(back3.known['AA']!.customName, 'Work laptop');
+    expect(back3.known['AA']!.important, isTrue);
+    expect(back3.events.length, 2); // join + leave preserved
+    expect(DeviceStore.decode('junk').known, isEmpty);
+    expect(DeviceStore.decode(null).events, isEmpty);
   });
 }
