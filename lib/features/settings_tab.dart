@@ -15,6 +15,7 @@ import '../core/zte_client.dart';
 import '../main.dart' show ZteApp;
 import 'dashboard_panels.dart';
 import 'device_intel_card.dart';
+import 'monitor_modes_card.dart';
 import 'smart_alerts_card.dart';
 import 'status_devices.dart';
 
@@ -48,6 +49,9 @@ class SettingsTab extends StatefulWidget {
   /// Route a native toast (dashboard-owned).
   final Future<void> Function(String title, String body) notify;
 
+  /// Restart polling (monitor mode changed interval/toggles).
+  final VoidCallback? onMonitorChanged;
+
   /// Report a firmware rejection once so the shell can latch it in the
   /// capability matrix instead of retrying.
   final void Function(String goformId, String reason)? onUnsupported;
@@ -72,6 +76,7 @@ class SettingsTab extends StatefulWidget {
     required this.onClearBalanceLog,
     required this.log,
     required this.notify,
+    this.onMonitorChanged,
     this.unsupported = const {},
     this.onUnsupported,
   });
@@ -272,6 +277,9 @@ class _SettingsTabState extends State<SettingsTab> {
             log: widget.log,
             notify: widget.notify,
           );
+          final monitors = MonitorModesCard(
+            onChanged: widget.onMonitorChanged,
+          );
 
           if (wide) {
             return Column(
@@ -296,6 +304,8 @@ class _SettingsTabState extends State<SettingsTab> {
                 ),
                 const SizedBox(height: 10),
                 SizedBox(width: double.infinity, child: intel),
+                const SizedBox(height: 10),
+                SizedBox(width: double.infinity, child: monitors),
                 const SizedBox(height: 10),
                 const SizedBox(
                   width: double.infinity,
@@ -326,6 +336,8 @@ class _SettingsTabState extends State<SettingsTab> {
               const SmartAlertsCard(),
               const SizedBox(height: 10),
               intel,
+              const SizedBox(height: 10),
+              monitors,
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),

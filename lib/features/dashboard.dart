@@ -18,6 +18,7 @@ import '../core/poller.dart';
 import '../core/capability.dart';
 import '../core/device_store.dart';
 import '../core/diagnostics.dart';
+import '../core/monitor_modes.dart';
 import '../core/platform.dart';
 import '../core/signal_locator.dart';
 import '../core/smart_alerts.dart';
@@ -377,7 +378,33 @@ class _DashboardPageState extends State<DashboardPage>
       onUnreachable: _smartUnreachable,
       onDevices: _deviceTick,
     )..start();
-    _logLine('poller started (30s) — minimize to tray to keep polling');
+    _applyMonitorSettings();
+    _logLine('poller started — minimize to tray to keep polling');
+  }
+
+  /// Phase 7: apply Desk/Travel + battery-notification prefs to the
+  /// running poller (restarts the timer when the interval changed).
+  Future<void> _applyMonitorSettings() async {
+    final p = _poller;
+    if (p == null) return;
+    try {
+      final ms = await MonitorSettings.load();
+      final want = monitorInterval(ms.mode);
+      p.lowBatteryPercent = ms.lowBatteryPercent;
+      p.lowBatteryNotify = ms.lowBatteryNotify;
+      p.fullBatteryNotify = ms.fullBatteryNotify;
+      p.lightMode = ms.mode == MonitorMode.travel;
+      if (p.interval != want) {
+        p.interval = want;
+        if (p.running) {
+          p.start(); // re-arm the periodic timer on the new cadence
+          _logLine(
+            'monitor mode: ${monitorModeLabel(ms.mode)} '
+            '(${want.inSeconds}s polls)',
+          );
+        }
+      }
+    } catch (_) {}
   }
 
   /// Fold background station snapshots into device intel (fire-and-
@@ -515,6 +542,7 @@ class _DashboardPageState extends State<DashboardPage>
       onClearBalanceLog: () => setState(() => _balanceRawLog.clear()),
       log: _logLine,
       notify: _notifyNow,
+      onMonitorChanged: _applyMonitorSettings,
       onUnsupported: _markUnsupported,
     ),
   ];

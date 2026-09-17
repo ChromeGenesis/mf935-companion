@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'monitor_modes.dart';
 import 'notifications.dart';
 import 'zte_client.dart';
 
@@ -31,6 +34,13 @@ class ZtePoller {
   double? lowDataMb;
   void Function(Map<String, dynamic> status)? onStatus;
 
+  /// Phase 7 monitors: notification toggles + travel light mode
+  /// (skips the inbox-capacity probe; the interval itself is owned by
+  /// the dashboard via [interval]).
+  bool lowBatteryNotify = true;
+  bool fullBatteryNotify = true;
+  bool lightMode = false;
+
   /// Fires once per unreachable episode (at the same 3-strike
   /// escalation as the toast) so smart-alert engines can record the
   /// outage window. Recovery is visible via the next [onStatus].
@@ -46,6 +56,8 @@ class ZtePoller {
 
   bool _lowBatteryNotified = false;
   bool _fullBatteryNotified = false;
+  bool _prolongedFullNotified = false;
+  DateTime? _fullSince;
   bool _lowDataNotified = false;
   bool _noSignalNotified = false;
   bool _unreachableNotified = false;
@@ -95,8 +107,33 @@ class ZtePoller {
     final tx = double.tryParse('${status['monthly_tx_bytes'] ?? '0'}') ?? 0;
     final usedMb = (rx + tx) / (1024 * 1024);
 
+    // Battery sample for the health/drain readout (best-effort).
+    if (battery != null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cur = BatterySamples.decode(
+          prefs.getString(BatterySamples.key),
+        );
+        final next = BatterySamples.added(
+          cur,
+          BatterySample(
+            at: DateTime.now(),
+            percent: battery,
+            charging: charging,
+          ),
+        );
+        await prefs.setString(
+          BatterySamples.key,
+          jsonEncode(next.map((s) => s.toJson()).toList()),
+        );
+      } catch (_) {}
+    }
+
     // Low battery: only when unplugged.
-    if (battery != null && !charging && battery <= lowBatteryPercent) {
+    if (lowBatteryNotify &&
+        battery != null &&
+        !charging &&
+        battery <= lowBatteryPercent) {
       if (!_lowBatteryNotified) {
         _lowBatteryNotified = true;
         await _notify('MF935 battery low',
@@ -106,15 +143,31 @@ class ZtePoller {
       _lowBatteryNotified = false;
     }
 
-    // Fully charged: unplug to preserve cell health.
+    // Fully charged: unplug to preserve cell health. Prolonged
+    // 100%-while-plugged (>30 min) escalates once per episode.
     if (battery != null && charging && battery >= 100) {
-      if (!_fullBatteryNotified) {
+      _fullSince ??= DateTime.now();
+      if (fullBatteryNotify && !_fullBatteryNotified) {
         _fullBatteryNotified = true;
         await _notify('MF935 battery full',
             'At 100% — unplug to preserve battery health.');
       }
+      final heldMins = DateTime.now().difference(_fullSince!).inMinutes;
+      if (fullBatteryNotify &&
+          heldMins >= 30 &&
+          !_prolongedFullNotified) {
+        _prolongedFullNotified = true;
+        await _notify('MF935 held at 100%',
+            'Plugged at full charge for ${heldMins}m — unplug; '
+            'lithium cells age fastest at 100%.');
+      }
     } else if (battery != null && battery < 100) {
       _fullBatteryNotified = false;
+      _prolongedFullNotified = false;
+      _fullSince = null;
+    } else if (!charging) {
+      _prolongedFullNotified = false;
+      _fullSince = null;
     }
 
     // Signal lost / restored.
@@ -172,8 +225,9 @@ class ZtePoller {
       }
     }
 
-    // Inbox nearly full: extra GET, but only every 10th tick (~5 min).
-    if (_tickCount % 10 == 0) {
+    // Inbox nearly full: extra GET, but only every 10th tick (~5 min)
+    // and never in travel light mode (radio stays quiet on the road).
+    if (!lightMode && _tickCount % 10 == 0) {
       try {
         final cap = await _client.getSmsCapacity();
         final total =

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
 import 'package:zte_mf935_app/core/device_store.dart';
+import 'package:zte_mf935_app/core/monitor_modes.dart';
 import 'package:zte_mf935_app/core/ndt7_client.dart';
 import 'package:zte_mf935_app/core/signal_locator.dart';
 import 'package:zte_mf935_app/core/smart_alerts.dart';
@@ -595,5 +596,40 @@ void main() {
     expect(back3.events.length, 2); // join + leave preserved
     expect(DeviceStore.decode('junk').known, isEmpty);
     expect(DeviceStore.decode(null).events, isEmpty);
+  });
+
+  test('Monitor settings decode + drain math', () {
+    expect(const MonitorSettings().mode, MonitorMode.desk);
+    expect(monitorInterval(MonitorMode.travel), const Duration(seconds: 90));
+    expect(monitorInterval(MonitorMode.desk), const Duration(seconds: 30));
+    final d = MonitorSettings.decode('{"mode":"travel","lowBatteryPercent":15}');
+    expect(d.mode, MonitorMode.travel);
+    expect(d.lowBatteryPercent, 15);
+    expect(MonitorSettings.decode('junk').lowBatteryPercent, 20);
+    expect(
+      MonitorSettings.decode('{"lowBatteryPercent":99}').lowBatteryPercent,
+      20,
+    );
+
+    BatterySample s(int mins, int pct, [bool c = false]) => BatterySample(
+      at: DateTime(2026, 1, 1, 12, 0).add(Duration(minutes: mins)),
+      percent: pct,
+      charging: c,
+    );
+    // 10% over 60 min unplugged → 10%/h.
+    expect(drainPerHour([s(0, 80), s(30, 75), s(60, 70)]), closeTo(10, 0.01));
+    // Charging samples never count.
+    expect(drainPerHour([s(0, 80), s(60, 100, true)]), isNull);
+    // Too thin (< 5 min span) → null, not a fake number.
+    expect(drainPerHour([s(0, 80), s(2, 79)]), isNull);
+    expect(drainPerHour([s(0, 80)]), isNull);
+    expect(drainPerHour([]), isNull);
+    // Ring caps at 60, oldest evicted.
+    var ring = <BatterySample>[];
+    for (var i = 0; i < 65; i++) {
+      ring = BatterySamples.added(ring, s(i, 80));
+    }
+    expect(ring.length, BatterySamples.maxSamples);
+    expect(BatterySamples.decode('junk'), isEmpty);
   });
 }
