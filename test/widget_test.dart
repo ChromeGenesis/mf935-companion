@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
 import 'package:zte_mf935_app/core/device_store.dart';
+import 'package:zte_mf935_app/core/incident_report.dart';
 import 'package:zte_mf935_app/core/monitor_modes.dart';
 import 'package:zte_mf935_app/core/ndt7_client.dart';
 import 'package:zte_mf935_app/core/signal_locator.dart';
@@ -631,5 +632,47 @@ void main() {
     }
     expect(ring.length, BatterySamples.maxSamples);
     expect(BatterySamples.decode('junk'), isEmpty);
+  });
+
+  test('Incident report: summary, scrub, MAC masking', () {
+    expect(maskMac('AA:BB:CC:DD:EE:FF'), '…EEFF');
+    expect(maskMac('short'), '…????');
+    final scrubbed = scrubSnapshot({
+      'signalbar': '3',
+      'imei': '12345',
+      'SIM_IMSI': 'x',
+      'network_type': 'LTE',
+    });
+    expect(scrubbed.containsKey('imei'), isFalse);
+    expect(scrubbed.containsKey('SIM_IMSI'), isFalse);
+    expect(scrubbed['signalbar'], '3');
+
+    final input = IncidentInput(
+      appVersion: '1.0.0+1',
+      gatewayIp: '192.168.0.1',
+      status: {'signalbar': '2', 'network_type': 'WCDMA', 'imei': 'leak?'},
+      deviceEvents: [
+        {
+          'mac': 'AA:BB:CC:11:22:33',
+          'name': 'laptop',
+          'joined': false,
+          'at': '2026-01-01T12:00:00',
+        },
+      ],
+      unsupported: {'USSD_PROCESS': 'flag=41'},
+    );
+    final text = buildIncidentText(
+      input,
+      now: DateTime(2026, 1, 1, 12, 30),
+    );
+    expect(text, contains('Signal 2/5 on WCDMA'));
+    expect(text, contains('…2233'));
+    expect(text, isNot(contains('AA:BB:CC')));
+    expect(text, isNot(contains('leak?')));
+    expect(text, contains('USSD_PROCESS'));
+    final json = buildIncidentJson(input, now: DateTime(2026, 1, 1, 12, 30));
+    expect(json['summary'], contains('Signal 2/5'));
+    expect((json['device_episodes'] as List).first['mac'], '…2233');
+    expect((json['network'] as Map).containsKey('imei'), isFalse);
   });
 }

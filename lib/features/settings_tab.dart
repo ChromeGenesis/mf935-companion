@@ -15,6 +15,7 @@ import '../core/zte_client.dart';
 import '../main.dart' show ZteApp;
 import 'dashboard_panels.dart';
 import 'device_intel_card.dart';
+import 'incident_card.dart';
 import 'monitor_modes_card.dart';
 import 'smart_alerts_card.dart';
 import 'status_devices.dart';
@@ -280,6 +281,13 @@ class _SettingsTabState extends State<SettingsTab> {
           final monitors = MonitorModesCard(
             onChanged: widget.onMonitorChanged,
           );
+          final incident = IncidentCard(
+            client: widget.client,
+            connected: widget.connected,
+            logLines: widget.logLines,
+            unsupported: widget.unsupported,
+            log: widget.log,
+          );
 
           if (wide) {
             return Column(
@@ -306,6 +314,8 @@ class _SettingsTabState extends State<SettingsTab> {
                 SizedBox(width: double.infinity, child: intel),
                 const SizedBox(height: 10),
                 SizedBox(width: double.infinity, child: monitors),
+                const SizedBox(height: 10),
+                SizedBox(width: double.infinity, child: incident),
                 const SizedBox(height: 10),
                 const SizedBox(
                   width: double.infinity,
@@ -338,6 +348,8 @@ class _SettingsTabState extends State<SettingsTab> {
               intel,
               const SizedBox(height: 10),
               monitors,
+              const SizedBox(height: 10),
+              incident,
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),
