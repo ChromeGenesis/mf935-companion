@@ -1,4 +1,4 @@
-# MF935 Companion Roadmap
+﻿# MF935 Companion Roadmap
 
 A practical roadmap for turning MF935 Companion into a reliable, high-quality modem operations tool.
 
@@ -23,13 +23,13 @@ Make modem problems obvious and modem actions safe:
 
 ## Phase 0: Stability Baseline
 
-- [ ] Keep `flutter analyze` clean.
-- [ ] Keep the widget and parsing tests green.
-- [ ] Add tests for every new pure scoring, formatting, and classification helper.
-- [ ] Add a small modem capability matrix: read-only, writable, firmware-dependent.
-- [ ] Make unsupported firmware commands visible in the UI without repeated retries.
-- [ ] Replace generic `refused` messages with the modem result, command, and next action.
-- [ ] Add a lightweight diagnostic export containing app version, firmware, and recent errors.
+- [x] Keep `flutter analyze` clean.
+- [x] Keep the widget and parsing tests green.
+- [x] Add tests for every new pure scoring, formatting, and classification helper.
+- [x] Add a small modem capability matrix: read-only, writable, firmware-dependent.
+- [x] Make unsupported firmware commands visible in the UI without repeated retries.
+- [x] Replace generic `refused` messages with the modem result, command, and next action.
+- [x] Add a lightweight diagnostic export containing app version, firmware, and recent errors.
 
 **Done when:** the app can fail gracefully, explain why, and never spam a rejected command.
 
@@ -107,26 +107,26 @@ The first major feature. It helps the user physically find a better location for
 
 ## Phase 4: Built-In Speed Test
 
-- [ ] Add a small, cancellable speed-test service.
-- [ ] Measure latency before throughput.
-- [ ] Measure download and upload with explicit progress.
+- [x] Add a small, cancellable speed-test service.
+- [x] Measure latency before throughput.
+- [x] Measure download and upload with explicit progress.
 - [ ] Record signal and network type at the start and end.
 - [ ] Store test results locally with a user label.
-- [ ] Show “signal problem” versus “carrier congestion” as a cautious diagnosis.
-- [ ] Avoid running tests automatically in the background.
-- [ ] Add a data-use warning before the first test.
+- [x] Show “signal problem” versus “carrier congestion” as a cautious diagnosis.
+- [x] Avoid running tests automatically in the background.
+- [x] Add a data-use warning before the first test.
 
 **Done when:** users can compare two physical locations under comparable conditions.
 
 ## Phase 5: Smart Alerts
 
-- [ ] Add a placement-degraded alert when signal or upload falls sharply from baseline.
-- [ ] Add a repeated-outage alert with episode duration.
-- [ ] Add a network fallback alert.
-- [ ] Add “modem reachable, internet quality poor” alert when evidence supports it.
-- [ ] Add a configurable quiet period.
-- [ ] Add per-alert enable/disable controls.
-- [ ] Include the evidence in every notification, not just a vague title.
+- [x] Add a placement-degraded alert when signal or upload falls sharply from baseline.
+- [x] Add a repeated-outage alert with episode duration.
+- [x] Add a network fallback alert.
+- [x] Add “modem reachable, internet quality poor” alert when evidence supports it.
+- [x] Add a configurable quiet period.
+- [x] Add per-alert enable/disable controls.
+- [x] Include the evidence in every notification, not just a vague title.
 
 Example:
 
@@ -134,45 +134,45 @@ Example:
 
 ## Phase 6: Connected-Device Intelligence
 
-- [ ] Keep connected-device count visible at all times.
-- [ ] Add first-seen and last-seen timestamps.
-- [ ] Detect device appearance and disappearance episodes.
-- [ ] Allow local device names such as `Work laptop` or `TV`.
-- [ ] Show connection duration.
-- [ ] Show per-device traffic only if the firmware exposes trustworthy values.
-- [ ] Notify when an important named device disappears.
-- [ ] Add a device-history view without retaining unnecessary identifying data.
+- [x] Keep connected-device count visible at all times.
+- [x] Add first-seen and last-seen timestamps.
+- [x] Detect device appearance and disappearance episodes.
+- [x] Allow local device names such as `Work laptop` or `TV`.
+- [x] Show connection duration.
+- [x] Show per-device traffic only if the firmware exposes trustworthy values.
+- [x] Notify when an important named device disappears.
+- [x] Add a device-history view without retaining unnecessary identifying data.
 
 ## Phase 7: Battery and Travel Modes
 
-- [ ] Add a battery-health panel with charging state and drain rate.
-- [ ] Add a travel mode that reduces polling and expensive diagnostics.
-- [ ] Add a desk mode that keeps richer monitoring enabled.
-- [ ] Warn about prolonged charging at 100%.
-- [ ] Add battery-low and battery-full notification settings.
-- [ ] Only expose charge-control features after confirming firmware support.
+- [x] Add a battery-health panel with charging state and drain rate.
+- [x] Add a travel mode that reduces polling and expensive diagnostics.
+- [x] Add a desk mode that keeps richer monitoring enabled.
+- [x] Warn about prolonged charging at 100%.
+- [x] Add battery-low and battery-full notification settings.
+- [x] Only expose charge-control features after confirming firmware support.
 
 ## Phase 8: Incident Reports
 
-- [ ] Add `Create incident report` from the diagnostics panel.
-- [ ] Include firmware, network type, signal values, uptime, recent events, and recent speed tests.
-- [ ] Redact passwords, cookies, message bodies, and unnecessary device identifiers.
-- [ ] Export as text and JSON first.
-- [ ] Add a copy-to-clipboard action.
-- [ ] Add a short human summary suitable for a carrier support ticket.
+- [x] Add `Create incident report` from the diagnostics panel.
+- [x] Include firmware, network type, signal values, uptime, recent events, and recent speed tests.
+- [x] Redact passwords, cookies, message bodies, and unnecessary device identifiers.
+- [x] Export as text and JSON first.
+- [x] Add a copy-to-clipboard action.
+- [x] Add a short human summary suitable for a carrier support ticket.
 
 ## Phase 9: Advanced Features
 
 These are valuable, but should wait until the core monitoring is trustworthy.
 
 - [ ] Room-by-room signal heatmap using manually marked spots.
-- [ ] Best time of day for downloads based on local history.
-- [ ] Latency-focused gaming mode.
-- [ ] Sustained-download streaming mode.
-- [ ] Scheduled diagnostics.
-- [ ] Firmware-aware command capability discovery.
-- [ ] Safe scheduled reboot with a clear warning and cancellation path.
-- [ ] Local read-only API for other apps on the same machine.
+- [x] Best time of day for downloads based on local history.
+- [x] Latency-focused gaming mode.
+- [x] Sustained-download streaming mode.
+- [x] Scheduled diagnostics.
+- [x] Firmware-aware command capability discovery.
+- [x] Safe scheduled reboot with a clear warning and cancellation path.
+- [x] Local read-only API for other apps on the same machine.
 - [ ] Compare two Scout sessions side by side.
 - [ ] Optional encrypted backup of local history.
 

@@ -13,6 +13,7 @@ import '../core/theme.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
 import '../main.dart' show ZteApp;
+import 'advanced_card.dart';
 import 'dashboard_panels.dart';
 import 'device_intel_card.dart';
 import 'incident_card.dart';
@@ -53,6 +54,9 @@ class SettingsTab extends StatefulWidget {
   /// Restart polling (monitor mode changed interval/toggles).
   final VoidCallback? onMonitorChanged;
 
+  /// Re-apply the loopback API toggle immediately.
+  final VoidCallback? onApiChanged;
+
   /// Report a firmware rejection once so the shell can latch it in the
   /// capability matrix instead of retrying.
   final void Function(String goformId, String reason)? onUnsupported;
@@ -78,6 +82,7 @@ class SettingsTab extends StatefulWidget {
     required this.log,
     required this.notify,
     this.onMonitorChanged,
+    this.onApiChanged,
     this.unsupported = const {},
     this.onUnsupported,
   });
@@ -288,6 +293,12 @@ class _SettingsTabState extends State<SettingsTab> {
             unsupported: widget.unsupported,
             log: widget.log,
           );
+          final advanced = AdvancedCard(
+            client: widget.client,
+            connected: widget.connected,
+            log: widget.log,
+            onApiChanged: widget.onApiChanged,
+          );
 
           if (wide) {
             return Column(
@@ -316,6 +327,8 @@ class _SettingsTabState extends State<SettingsTab> {
                 SizedBox(width: double.infinity, child: monitors),
                 const SizedBox(height: 10),
                 SizedBox(width: double.infinity, child: incident),
+                const SizedBox(height: 10),
+                SizedBox(width: double.infinity, child: advanced),
                 const SizedBox(height: 10),
                 const SizedBox(
                   width: double.infinity,
@@ -350,6 +363,8 @@ class _SettingsTabState extends State<SettingsTab> {
               monitors,
               const SizedBox(height: 10),
               incident,
+              const SizedBox(height: 10),
+              advanced,
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
+import 'package:zte_mf935_app/core/advanced.dart';
 import 'package:zte_mf935_app/core/device_store.dart';
 import 'package:zte_mf935_app/core/incident_report.dart';
 import 'package:zte_mf935_app/core/monitor_modes.dart';
@@ -674,5 +675,69 @@ void main() {
     expect(json['summary'], contains('Signal 2/5'));
     expect((json['device_episodes'] as List).first['mac'], '…2233');
     expect((json['network'] as Map).containsKey('imei'), isFalse);
+  });
+
+  test('Advanced: best-time, schedules, discovery split', () {
+    SpeedRecord rec(int hour, double down) => SpeedRecord(
+      at: DateTime(2026, 1, 5, hour, 10),
+      downMbps: down,
+    );
+    // Evenings win: two 18–20h samples beat a single noon spike.
+    final best = bestTimeOfDay([
+      rec(18, 20),
+      rec(19, 24),
+      rec(12, 60),
+      rec(3, 5),
+      rec(4, 6),
+    ]);
+    expect(best, isNotNull);
+    expect(best!.hour, 18); // 18:00–20:00 bucket
+    expect(best.avgDown, closeTo(22, 0.01));
+    expect(best.count, 2);
+    expect(bestTimeLabel(best), contains('18:00'));
+    // Single-sample buckets never qualify.
+    expect(bestTimeOfDay([rec(12, 60)]), isNull);
+    expect(bestTimeOfDay([]), isNull);
+
+    // Scheduled diag fires once per day at its hour.
+    const diag = ScheduledDiag(enabled: true, hour: 7);
+    expect(diag.dueAt(DateTime(2026, 1, 1, 7, 5)), isTrue);
+    expect(diag.dueAt(DateTime(2026, 1, 1, 8, 0)), isFalse);
+    const done = ScheduledDiag(
+      enabled: true,
+      hour: 7,
+      lastRunDay: '2026-01-01',
+    );
+    expect(done.dueAt(DateTime(2026, 1, 1, 7, 30)), isFalse);
+    expect(
+      const ScheduledDiag(enabled: false, hour: 7).dueAt(
+        DateTime(2026, 1, 1, 7, 0),
+      ),
+      isFalse,
+    );
+    expect(ScheduledDiag.dayKey(DateTime(2026, 3, 4, 5, 6)), '2026-03-04');
+
+    // One-shot reboot: due from its time on, disarmed when empty.
+    final rb = ScheduledReboot(at: DateTime(2026, 1, 1, 12, 0));
+    expect(rb.dueAt(DateTime(2026, 1, 1, 11, 59)), isFalse);
+    expect(rb.dueAt(DateTime(2026, 1, 1, 12, 1)), isTrue);
+    expect(const ScheduledReboot().dueAt(DateTime(2026, 1, 1)), isFalse);
+    expect(const ScheduledReboot().armed, isFalse);
+
+    // Discovery split honors the probe list only.
+    final split = splitDiscovery({'signalbar': '3', 'lte_rsrp': '-100'});
+    expect(split.supported, containsAll(['signalbar', 'lte_rsrp']));
+    expect(split.silent, contains('network_type'));
+    expect(
+      split.supported.length + split.silent.length,
+      discoveryProbeKeys.length,
+    );
+
+    // Restore validation rejects garbage before touching prefs.
+    expect(restoreBackup('not json'), throwsFormatException);
+    expect(
+      restoreBackup('{"app":"other","data":{}}'),
+      throwsFormatException,
+    );
   });
 }

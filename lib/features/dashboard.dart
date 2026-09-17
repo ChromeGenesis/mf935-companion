@@ -16,10 +16,13 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/poller.dart';
 import '../core/capability.dart';
+import '../core/advanced.dart';
 import '../core/device_store.dart';
 import '../core/diagnostics.dart';
 import '../core/monitor_modes.dart';
 import '../core/platform.dart';
+import '../core/speed_history.dart';
+import '../core/speed_test.dart';
 import '../core/signal_locator.dart';
 import '../core/smart_alerts.dart';
 import 'bottom_nav.dart';
@@ -74,6 +77,13 @@ class _DashboardPageState extends State<DashboardPage>
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
 
+  /// Phase 9 loopback API server (lives while the toggle is on).
+  final LocalApiServer _localApi = LocalApiServer();
+
+  /// Phase 9 housekeeping: scheduled diagnostics + scheduled reboot,
+  /// checked every minute.
+  Timer? _housekeeping;
+
   /// Phase 5 smart-alert engine: fed by every poller tick, fires
   /// evidence-bearing notifications. Last-fired map is restored from
   /// prefs so the quiet period survives restarts.
@@ -115,6 +125,10 @@ class _DashboardPageState extends State<DashboardPage>
     }
     _client = ZteClient();
     _restoreSettings();
+    _housekeeping = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _runHousekeeping(),
+    );
   }
 
   @override
@@ -124,6 +138,8 @@ class _DashboardPageState extends State<DashboardPage>
       trayManager.removeListener(this);
     }
     _cooldownTimer?.cancel();
+    _housekeeping?.cancel();
+    _localApi.stop();
     _balanceFeed.dispose();
     _signalFeed.dispose();
     _poller?.stop();
@@ -139,6 +155,7 @@ class _DashboardPageState extends State<DashboardPage>
     final lastFired = await SmartAlertStore.loadLastFired();
     if (!mounted) return;
     _alerts.lastFired.addAll(lastFired);
+    _applyLocalApi(); // persisted toggle takes effect on launch
     setState(() {
       _ipCtrl.text = ip;
       _passCtrl.text = pw;
@@ -460,6 +477,104 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
+  /// Phase 9 housekeeping: fire the scheduled reboot once, then run
+  /// the daily diagnostic snapshot when its hour arrives. All
+  /// best-effort — a failure is logged, never thrown.
+  Future<void> _runHousekeeping() async {
+    if (!_connected) return;
+    final now = DateTime.now();
+    // One-shot reboot: clear BEFORE executing so a crash can't loop it.
+    try {
+      final rb = await ScheduledReboot.load();
+      if (rb.dueAt(now)) {
+        await const ScheduledReboot().save();
+        _logLine('scheduled reboot firing');
+        await _notifyNow('MiFi reboot', 'Scheduled reboot firing now.');
+        try {
+          await _client.reboot();
+          _logLine('reboot sent');
+        } catch (e) {
+          _logLine('reboot sent (connection dropped as expected: $e)');
+        }
+        if (mounted) setState(() {});
+      }
+    } catch (_) {}
+    // Daily diagnostic snapshot.
+    try {
+      final diag = await ScheduledDiag.load();
+      if (!diag.dueAt(now)) return;
+      final s = await _client.getStatus();
+      final t = await _client.getTrafficStats();
+      if (!mounted) return;
+      setState(() => _status = s);
+      _logLine(
+        'scheduled diagnostic: signal ${s['signalbar'] ?? '?'}/5 '
+        '${s['network_type'] ?? ''} · battery '
+        '${s['battery_vol_percent'] ?? '?'}% · month '
+        '${t['monthly_rx_bytes'] ?? '?'}B rx',
+      );
+      await _notifyNow(
+        'MiFi diagnostic',
+        'Daily snapshot captured — see the log.',
+      );
+      if (diag.autoSpeedTest) await _scheduledSpeedTest();
+      await ScheduledDiag(
+        enabled: diag.enabled,
+        hour: diag.hour,
+        autoSpeedTest: diag.autoSpeedTest,
+        lastRunDay: ScheduledDiag.dayKey(now),
+      ).save();
+    } catch (e) {
+      _logLine('scheduled diagnostic failed: $e');
+    }
+  }
+
+  /// Headless Quick test for the scheduler: requires the first-run
+  /// consent AND the explicit auto-test toggle — never a surprise.
+  Future<void> _scheduledSpeedTest() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('speed_test_consent') != true) {
+        _logLine('scheduled speed test skipped (no data consent)');
+        return;
+      }
+      final runner = SpeedTestRunner();
+      try {
+        final r = await runner.run((_, _, _) {}, mode: SpeedTestMode.quick);
+        if (r.error == null) {
+          final history = await SpeedHistory.load();
+          await history.added(SpeedRecord.fromResult(r)).save();
+          _logLine(
+            'scheduled speed test: ${r.latencyMs?.toStringAsFixed(0)} ms · '
+            '${r.downloadBps == null ? '—' : (r.downloadBps! * 8 / 1e6).toStringAsFixed(1)} Mbps',
+          );
+        } else {
+          _logLine('scheduled speed test failed: ${r.error}');
+        }
+      } finally {
+        runner.dispose();
+      }
+    } catch (e) {
+      _logLine('scheduled speed test error: $e');
+    }
+  }
+
+  /// Phase 9: apply the loopback-API toggle immediately.
+  Future<void> _applyLocalApi() async {
+    try {
+      final s = await LocalApiSettings.load();
+      if (s.enabled) {
+        await _localApi.start(port: s.port, snapshot: () => _status);
+        _logLine('local API on http://127.0.0.1:${_localApi.port}/snapshot');
+      } else {
+        await _localApi.stop();
+        _logLine('local API stopped');
+      }
+    } catch (e) {
+      _logLine('local API failed: $e');
+    }
+  }
+
   /// Shell: sidebar on desktop, bare content on mobile (which gets
   /// the bottom nav instead).
   Widget _shell(Widget content) {
@@ -543,6 +658,7 @@ class _DashboardPageState extends State<DashboardPage>
       log: _logLine,
       notify: _notifyNow,
       onMonitorChanged: _applyMonitorSettings,
+      onApiChanged: _applyLocalApi,
       onUnsupported: _markUnsupported,
     ),
   ];

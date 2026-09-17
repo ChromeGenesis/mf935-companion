@@ -267,8 +267,15 @@ List<String> oldestSmsIds(List<SmsMessage> msgs, int n) {
 }
 
 /// "5m ago", "2h ago", "3d ago" for snapshot freshness labels.
-String timeAgo(DateTime t) {
+String timeAgo(DateTime t, {bool allowFuture = false}) {
   final d = DateTime.now().difference(t);
+  if (allowFuture && d.isNegative) {
+    final f = -d;
+    if (f.inMinutes < 1) return 'in under a minute';
+    if (f.inHours < 1) return 'in ${f.inMinutes}m';
+    if (f.inDays < 1) return 'in ${f.inHours}h';
+    return 'in ${f.inDays}d';
+  }
   if (d.inMinutes < 1) return 'just now';
   if (d.inHours < 1) return '${d.inMinutes}m ago';
   if (d.inDays < 1) return '${d.inHours}h ago';
