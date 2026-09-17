@@ -1,13 +1,15 @@
 library;
 
-/// Speed-test card (SSOT): runs the [SpeedTestRunner] phases with a
-/// linear progress track, then shows latency / down / up results.
-/// First run per install asks for consent (the test consumes real
-/// data); results are logged to the diagnostics feed.
+/// Speed-test card (SSOT): runs the [SpeedTestRunner] in Full (M-Lab
+/// ndt7), Quick (fixed-size fallback) or Latency-only mode with an
+/// animated live-rate meter, then shows the results with their named
+/// server. First run per install asks for consent (the test consumes
+/// real data); finished runs are logged and persisted to history.
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/dialogs.dart';
+import '../core/speed_history.dart';
 import '../core/speed_test.dart';
 import '../core/theme.dart';
 import '../core/ui_kit.dart';
@@ -34,6 +36,7 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
   SpeedPhase _phase = SpeedPhase.idle;
   double _progress = 0;
   double? _liveBps;
+  SpeedTestMode _mode = SpeedTestMode.full;
   SpeedTestResult? _last;
 
   @override
@@ -43,8 +46,9 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
   }
 
   Future<void> _start() async {
-    // First-use data-use warning (Phase 4 guardrail): one consent, then
-    // never asked again.
+    // First-use data-use warning: one consent, then never asked
+    // again. The Full test is time-based (~10 s at line rate each
+    // way), so fast links move real megabytes — the dialog says so.
     final prefs = await SharedPreferences.getInstance();
     final consented = prefs.getBool(_consentKey) ?? false;
     if (!consented && mounted) {
@@ -54,17 +58,19 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
         title: 'Run a speed test?',
         danger: false,
         message:
-            'The test uses about 10 MB of carrier data (downloads ~9 MB, '
-            'uploads ~1 MB). It runs parallel streams like fast.com and '
-            'reports the peak sustained rate — never automatically in '
-            'the background.',
+            'Full mode streams at line rate for ~10 s each way on M-Lab '
+            'servers (the same test behind Google\'s speed check) — on a '
+            'fast link that is tens of MB of carrier data. Quick mode '
+            'uses ~10 MB; Latency mode almost nothing. Tests never run '
+            'automatically in the background.',
         confirmLabel: 'Run test',
       );
       if (!ok) return;
       await prefs.setBool(_consentKey, true);
     }
 
-    widget.log('speed test: starting…');
+    final mode = _mode;
+    widget.log('speed test starting (${SpeedTestRunner.modeLabel(mode)})…');
     final r = await _runner.run((phase, progress, liveBps) {
       if (!mounted) return;
       setState(() {
@@ -72,7 +78,7 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
         _progress = progress;
         _liveBps = liveBps;
       });
-    });
+    }, mode: mode);
     if (!mounted) return;
     setState(() {
       _last = r;
@@ -84,10 +90,14 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
     } else if (r.error == 'cancelled') {
       widget.log('speed test cancelled');
     } else {
+      // Persist finished runs for incident reports + best-time-of-day.
+      final history = await SpeedHistory.load();
+      await history.added(SpeedRecord.fromResult(r)).save();
       widget.log(
-        'speed test: ${r.latencyMs?.toStringAsFixed(0)} ms · '
-        '${formatRate(r.downloadBps ?? 0)} down · '
-        '${formatRate(r.uploadBps ?? 0)} up',
+        'speed test [${r.server}]: '
+        '${r.latencyMs?.toStringAsFixed(0)} ms · '
+        '${r.downloadBps == null ? '—' : formatRate(r.downloadBps!)} down · '
+        '${r.uploadBps == null ? '—' : formatRate(r.uploadBps!)} up',
       );
     }
   }
@@ -174,39 +184,115 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
               ),
             ),
           ],
-          if (!running && r != null) ...[
+          if (!running) ...[
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _speedStat(
-                    c,
-                    r.latencyMs == null
-                        ? '—'
-                        : '${r.latencyMs!.toStringAsFixed(0)} ms',
-                    'latency',
-                  ),
+            PillSwitcher<SpeedTestMode>(
+              expanded: true,
+              options: const [
+                PillOption(
+                  value: SpeedTestMode.full,
+                  label: 'Full',
+                  icon: Icons.hub_outlined,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _speedStat(
-                    c,
-                    r.downloadBps == null
-                        ? '—'
-                        : formatRate(r.downloadBps!),
-                    'download',
-                  ),
+                PillOption(
+                  value: SpeedTestMode.quick,
+                  label: 'Quick',
+                  icon: Icons.bolt_outlined,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _speedStat(
-                    c,
-                    r.uploadBps == null ? '—' : formatRate(r.uploadBps!),
-                    'upload',
-                  ),
+                PillOption(
+                  value: SpeedTestMode.latency,
+                  label: 'Latency',
+                  icon: Icons.timelapse_outlined,
                 ),
               ],
+              selected: _mode,
+              onChanged: (m) => setState(() => _mode = m),
             ),
+            const SizedBox(height: 6),
+            Text(
+              SpeedTestRunner.modeHint(_mode),
+              style: TextStyle(color: c.textMuted, fontSize: 11.5),
+            ),
+          ],
+          if (!running && r != null) ...[
+            const SizedBox(height: 10),
+            if (r.jitterMs != null)
+              Row(
+                children: [
+                  Expanded(
+                    child: _speedStat(
+                      c,
+                      r.latencyMs == null
+                          ? '—'
+                          : '${r.latencyMs!.toStringAsFixed(0)} ms',
+                      'latency',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _speedStat(
+                      c,
+                      '${r.jitterMs!.toStringAsFixed(1)} ms',
+                      'jitter',
+                    ),
+                  ),
+                ],
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: _speedStat(
+                      c,
+                      r.latencyMs == null
+                          ? '—'
+                          : '${r.latencyMs!.toStringAsFixed(0)} ms',
+                      'latency',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _speedStat(
+                      c,
+                      r.downloadBps == null
+                          ? '—'
+                          : formatRate(r.downloadBps!),
+                      'download',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _speedStat(
+                      c,
+                      r.uploadBps == null ? '—' : formatRate(r.uploadBps!),
+                      'upload',
+                    ),
+                  ),
+                ],
+              ),
+            if (r.server.isNotEmpty && r.error == null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(
+                    r.provenance == 'ndt7'
+                        ? Icons.verified_outlined
+                        : Icons.warning_amber_outlined,
+                    size: 12,
+                    color: c.textMuted,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      r.server,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textMuted, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (r.error != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -231,8 +317,8 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Parallel streams through the carrier, peak sustained '
-                'rate like fast.com. Uses real data — run sparingly.',
+                'Full mode runs the sustained M-Lab test — the truthful '
+                'number. Uses real carrier data; run sparingly.',
                 style: TextStyle(color: c.textMuted, fontSize: 11.5),
               ),
             ),

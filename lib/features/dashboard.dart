@@ -19,6 +19,7 @@ import '../core/capability.dart';
 import '../core/diagnostics.dart';
 import '../core/platform.dart';
 import '../core/signal_locator.dart';
+import '../core/smart_alerts.dart';
 import 'bottom_nav.dart';
 import 'info_tab.dart';
 import 'settings_tab.dart';
@@ -70,6 +71,11 @@ class _DashboardPageState extends State<DashboardPage>
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
+
+  /// Phase 5 smart-alert engine: fed by every poller tick, fires
+  /// evidence-bearing notifications. Last-fired map is restored from
+  /// prefs so the quiet period survives restarts.
+  final SmartAlertEngine _alerts = SmartAlertEngine();
 
   /// Key into the Status tab for pull-to-refresh (its state owns the
   /// balance/devices/signal refresh legs).
@@ -128,7 +134,9 @@ class _DashboardPageState extends State<DashboardPage>
     final prefs = await SharedPreferences.getInstance();
     final ip = prefs.getString('gateway_ip') ?? '192.168.0.1';
     final pw = prefs.getString('admin_password') ?? 'admin';
+    final lastFired = await SmartAlertStore.loadLastFired();
     if (!mounted) return;
+    _alerts.lastFired.addAll(lastFired);
     setState(() {
       _ipCtrl.text = ip;
       _passCtrl.text = pw;
@@ -363,9 +371,47 @@ class _DashboardPageState extends State<DashboardPage>
       notifications: _notifications,
       onStatus: (s) {
         if (mounted) setState(() => _status = s);
+        _smartTick(s);
       },
+      onUnreachable: _smartUnreachable,
     )..start();
     _logLine('poller started (30s) — minimize to tray to keep polling');
+  }
+
+  /// Feed one successful poll into the smart-alert engine and raise
+  /// whatever fires (fire-and-forget: notification delivery must never
+  /// block the poll loop).
+  Future<void> _smartTick(Map<String, dynamic> s) async {
+    try {
+      final settings = await SmartAlertStore.loadSettings();
+      final fired = _alerts.tick(
+        reachable: true,
+        bars: int.tryParse('${s['signalbar'] ?? ''}'),
+        networkType: '${s['network_type'] ?? ''}',
+        settings: settings,
+      );
+      await _raiseSmartAlerts(fired);
+    } catch (_) {
+      // Alert evaluation must never break polling.
+    }
+  }
+
+  Future<void> _smartUnreachable() async {
+    try {
+      final settings = await SmartAlertStore.loadSettings();
+      final fired = _alerts.tick(reachable: false, settings: settings);
+      await _raiseSmartAlerts(fired);
+    } catch (_) {}
+  }
+
+  Future<void> _raiseSmartAlerts(List<SmartAlert> fired) async {
+    if (fired.isEmpty) return;
+    await SmartAlertStore.appendHistory(fired);
+    await SmartAlertStore.saveLastFired(_alerts.lastFired);
+    for (final a in fired) {
+      _logLine('smart alert: ${a.title} — ${a.body}');
+      await _notifyNow('MiFi ${a.title}', a.body);
+    }
   }
 
   /// Shell: sidebar on desktop, bare content on mobile (which gets

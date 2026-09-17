@@ -2,15 +2,21 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
+import 'package:zte_mf935_app/core/ndt7_client.dart';
 import 'package:zte_mf935_app/core/signal_locator.dart';
+import 'package:zte_mf935_app/core/smart_alerts.dart';
+import 'package:zte_mf935_app/core/speed_history.dart';
 import 'package:zte_mf935_app/core/speed_test.dart';
 import 'package:zte_mf935_app/core/widgets.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
 
 void main() {
   testWidgets('Dashboard renders login form', (WidgetTester tester) async {
+    // Prefs have no platform channel in widget tests — in-memory mock.
+    SharedPreferences.setMockInitialValues({});
     // App enforces a 980x700 minimum window — render at supported size.
     tester.view.physicalSize = const Size(980, 700);
     tester.view.devicePixelRatio = 1.0;
@@ -21,7 +27,10 @@ void main() {
     // Connection lives exclusively in Settings (Status is read-only).
     await tester.tap(find.text('Settings').first);
     await tester.pumpAndSettle();
-    expect(find.text('Login & poll'), findsOneWidget);
+    // Gateway field = the Connection panel. (The login button itself
+    // may read "Login & poll" or "Wait Ns" — in-test the auth flow
+    // really runs against no modem and starts its lockout cooldown.)
+    expect(find.text('Gateway IP'), findsOneWidget);
   });
 
   test('USSD balance parsing handles GB and MB', () {
@@ -316,5 +325,235 @@ void main() {
     expect(oldestSmsIds(msgs, 2), ['1', '3']);
     expect(oldestSmsIds(msgs, 99).length, 4);
     expect(oldestSmsIds([], 50), isEmpty);
+  });
+
+  test('ndt7 locate parsing prefers wss, skips incomplete', () {
+    final locate = {
+      'results': [
+        {
+          'machine': 'mlab1-xyz.mlab-oti.measurement-lab.org',
+          'location': {'city': 'Lagos', 'country': 'NG'},
+          'urls': {
+            'wss:///ndt/v7/download':
+                'wss://ndt-mlab1-xyz.mlab-oti.measurement-lab.org/ndt/v7/download?access_token=abc',
+            'wss:///ndt/v7/upload':
+                'wss://ndt-mlab1-xyz.mlab-oti.measurement-lab.org/ndt/v7/upload?access_token=abc',
+          },
+        },
+        {
+          // Missing upload: skipped, never offered to the dialer.
+          'machine': 'mlab2-broken',
+          'location': {'city': 'Nowhere', 'country': 'XX'},
+          'urls': {'wss:///ndt/v7/download': 'wss://x/download'},
+        },
+      ],
+    };
+    final servers = selectNdt7Servers(locate);
+    expect(servers.length, 1);
+    expect(servers.first.city, 'Lagos');
+    expect(servers.first.label, 'Lagos, NG');
+    expect(servers.first.downloadUrl, contains('access_token=abc'));
+    expect(selectNdt7Servers(null), isEmpty);
+    expect(selectNdt7Servers({'results': 'junk'}), isEmpty);
+    expect(selectNdt7Servers({}), isEmpty);
+  });
+
+  test('ndt7 measurement parsing + throughput math', () {
+    const msg =
+        '{"TCPInfo": {"BytesReceived": 1000000, "ElapsedTime": 2000000, '
+        '"MinRTT": 45000}, "Test": "upload"}';
+    final m = parseNdt7Measurement(msg);
+    expect(m, isNotNull);
+    expect(m!.tcpBytes, 1000000);
+    expect(m.tcpElapsedUs, 2000000);
+    expect(m.minRttUs, 45000);
+    // AppInfo / malformed text never parses.
+    expect(parseNdt7Measurement('{"AppInfo": {}}'), isNull);
+    expect(parseNdt7Measurement('not json'), isNull);
+    expect(parseNdt7Measurement('{"TCPInfo": {"MinRTT": 1}}'), isNull);
+    // Negative MinRTT (unknown) drops the sample, keeps the counters.
+    final neg = parseNdt7Measurement(
+      '{"TCPInfo": {"BytesReceived": 5, "ElapsedTime": 5, "MinRTT": -1}}',
+    );
+    expect(neg, isNotNull);
+    expect(neg!.minRttUs, isNull);
+    // Upload delta: 1 MB over the middle 8 s of socket life.
+    const first = Ndt7ServerMeasurement(tcpBytes: 100, tcpElapsedUs: 1000000);
+    const last = Ndt7ServerMeasurement(
+      tcpBytes: 1000100,
+      tcpElapsedUs: 9000000,
+    );
+    expect(ndt7UploadThroughputBps([first, last]), closeTo(125000, 0.5));
+    expect(ndt7UploadThroughputBps([first]), 0);
+    expect(ndt7UploadThroughputBps([]), 0);
+    // Client goodput over the message window.
+    expect(ndt7ClientThroughputBps(1000000, 0, 8000000), closeTo(125000, 0.5));
+    expect(ndt7ClientThroughputBps(0, 0, 1), 0);
+    expect(ndt7ClientThroughputBps(100, 5, 5), 0);
+    // Jitter = mean absolute deviation from the median.
+    expect(SpeedTestRunner.jitterOf([10, 10, 10, 10]), 0);
+    expect(
+      SpeedTestRunner.jitterOf([10.0, 12.0, 10.0, 14.0]),
+      closeTo(1.5, 0.001),
+    );
+    expect(() => SpeedTestRunner.jitterOf([]), throwsArgumentError);
+  });
+
+  test('Speed history decode/add round-trips, caps at 100', () {
+    expect(SpeedHistory.decode(null).records, isEmpty);
+    expect(SpeedHistory.decode('garbage').records, isEmpty);
+    expect(SpeedHistory.decode('{"a":1}').records, isEmpty);
+    var h = const SpeedHistory();
+    for (var i = 0; i < 105; i++) {
+      h = h.added(
+        SpeedRecord(
+          at: DateTime(2026, 1, 1).add(Duration(minutes: i)),
+          downMbps: i.toDouble(),
+        ),
+      );
+    }
+    expect(h.records.length, SpeedHistory.maxEntries);
+    expect(h.records.first.downMbps, 104.0); // newest first
+    final back = SpeedHistory.decode(h.encode());
+    expect(back.records.length, SpeedHistory.maxEntries);
+    expect(back.records.first.downMbps, 104.0);
+    expect(back.records.first.at, DateTime(2026, 1, 1, 1, 44));
+  });
+
+  test('Smart alerts: ranks, degradation, fallback, outage, quiet', () {
+    expect(networkRank('LTE'), 3);
+    expect(networkRank('4G'), 3);
+    expect(networkRank('WCDMA'), 2);
+    expect(networkRank('HSPA+'), 2);
+    expect(networkRank('EDGE'), 1);
+    expect(networkRank('5G NR'), 4);
+    expect(networkRank(''), -1);
+    expect(networkRank('mystery'), -1);
+
+    final settings = SmartAlertSettings.defaults();
+    var now = DateTime(2026, 1, 1, 12, 0);
+    DateTime step(int mins) => now = now.add(Duration(minutes: mins));
+
+    // Placement degradation: baseline 4-5, then collapse to 1.
+    final eng = SmartAlertEngine();
+    for (var i = 0; i < 6; i++) {
+      expect(
+        eng.tick(
+          reachable: true,
+          bars: 4,
+          networkType: 'LTE',
+          settings: settings,
+          now: step(1),
+        ),
+        isEmpty,
+      );
+    }
+    final fired = eng.tick(
+      reachable: true,
+      bars: 1,
+      networkType: 'LTE',
+      settings: settings,
+      now: step(1),
+    );
+    expect(
+      fired.where((a) => a.id == SmartAlertId.placementDegraded).length,
+      1,
+    );
+    expect(fired.first.body, contains('4/5'));
+    // Same episode re-fires nothing (quiet period + streak latch).
+    expect(
+      eng.tick(
+        reachable: true,
+        bars: 1,
+        networkType: 'LTE',
+        settings: settings,
+        now: step(1),
+      ).where((a) => a.id == SmartAlertId.placementDegraded),
+      isEmpty,
+    );
+
+    // Network fallback LTE -> WCDMA carries both names as evidence.
+    final eng2 = SmartAlertEngine();
+    eng2.tick(
+      reachable: true,
+      bars: 3,
+      networkType: 'LTE',
+      settings: settings,
+      now: now,
+    );
+    final fb = eng2.tick(
+      reachable: true,
+      bars: 3,
+      networkType: 'WCDMA',
+      settings: settings,
+      now: step(1),
+    );
+    expect(
+      fb.where((a) => a.id == SmartAlertId.networkFallback).length,
+      1,
+    );
+    expect(fb.first.body, contains('LTE'));
+    expect(fb.first.body, contains('WCDMA'));
+
+    // Repeated outage: 3 unreachable→recovery episodes in 30 min.
+    final eng3 = SmartAlertEngine();
+    List<SmartAlert> out = [];
+    for (var i = 0; i < 3; i++) {
+      eng3.tick(reachable: false, settings: settings, now: step(5));
+      out = eng3.tick(
+        reachable: true,
+        bars: 3,
+        networkType: 'LTE',
+        settings: settings,
+        now: step(1),
+      );
+    }
+    expect(
+      out.where((a) => a.id == SmartAlertId.repeatedOutage).length,
+      1,
+    );
+    expect(out.first.body, contains('3×'));
+
+    // Disabled alert never fires.
+    final off = SmartAlertSettings(
+      enabled: {for (final id in SmartAlertId.values) id: false},
+      quietMinutes: 0,
+    );
+    final eng4 = SmartAlertEngine();
+    for (var i = 0; i < 6; i++) {
+      eng4.tick(
+        reachable: true,
+        bars: 4,
+        networkType: 'LTE',
+        settings: off,
+        now: step(1),
+      );
+    }
+    expect(
+      eng4.tick(
+        reachable: true,
+        bars: 1,
+        networkType: 'LTE',
+        settings: off,
+        now: step(1),
+      ),
+      isEmpty,
+    );
+
+    // History decode skips corrupt rows, never throws.
+    expect(SmartAlertStore.decodeHistory(null), isEmpty);
+    expect(SmartAlertStore.decodeHistory('junk'), isEmpty);
+    final ok = SmartAlert(
+      id: SmartAlertId.networkFallback,
+      title: 't',
+      body: 'b',
+      at: now,
+    );
+    final back2 = SmartAlertStore.decodeHistory(
+      '[{"id":"networkFallback","title":"t","body":"b",'
+      '"at":"${now.toIso8601String()}"},{"id":"nope"}]',
+    );
+    expect(back2.length, 1);
+    expect(back2.first.title, ok.title);
   });
 }

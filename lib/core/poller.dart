@@ -20,6 +20,7 @@ class ZtePoller {
     this.lowBatteryPercent = 20,
     this.lowDataMb,
     this.onStatus,
+    this.onUnreachable,
   });
 
   final ZteClient _client;
@@ -28,6 +29,11 @@ class ZtePoller {
   int lowBatteryPercent;
   double? lowDataMb;
   void Function(Map<String, dynamic> status)? onStatus;
+
+  /// Fires once per unreachable episode (at the same 3-strike
+  /// escalation as the toast) so smart-alert engines can record the
+  /// outage window. Recovery is visible via the next [onStatus].
+  void Function()? onUnreachable;
 
   Timer? _timer;
   int _tickCount = 0;
@@ -66,6 +72,7 @@ class ZtePoller {
       _failStreak++;
       if (_failStreak >= 3 && !_unreachableNotified) {
         _unreachableNotified = true;
+        onUnreachable?.call();
         await _notify('MF935 unreachable',
             'No answer for ${_failStreak * interval.inSeconds}s. Check WiFi / power.');
       }

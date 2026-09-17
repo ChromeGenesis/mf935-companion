@@ -14,6 +14,7 @@ import '../core/widgets.dart';
 import '../core/zte_client.dart';
 import '../main.dart' show ZteApp;
 import 'dashboard_panels.dart';
+import 'smart_alerts_card.dart';
 import 'status_devices.dart';
 
 class SettingsTab extends StatefulWidget {
@@ -241,8 +242,7 @@ class _SettingsTabState extends State<SettingsTab> {
           final deviceActions = DeviceActionsCard(
             connected: widget.connected,
             onAction: _devicePowerAction,
-          );
-          final power = PowerCard(
+          );          final power = PowerCard(
             powerSave: _powerSave,
             wifiCoverage: _wifiCoverage,
             wifiSleepMinutes: _wifiSleepMinutes,
@@ -276,6 +276,8 @@ class _SettingsTabState extends State<SettingsTab> {
                           deviceActions,
                           const SizedBox(height: 10),
                           power,
+                          const SizedBox(height: 10),
+                          const SmartAlertsCard(),
                         ],
                       ),
                     ),
@@ -307,6 +309,8 @@ class _SettingsTabState extends State<SettingsTab> {
               deviceActions,
               const SizedBox(height: 10),
               power,
+              const SizedBox(height: 10),
+              const SmartAlertsCard(),
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),
