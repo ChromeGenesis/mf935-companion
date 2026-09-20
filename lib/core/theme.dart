@@ -70,7 +70,10 @@ class ZteColors extends ThemeExtension<ZteColors> {
     danger: Color(0xFFEF4444),
     textPrimary: Color(0xFFF8FAFC),
     textSecondary: Color(0xFF94A3B8),
-    textMuted: Color(0xFF64748B),
+    // Lifted from slate-500 for 11px body copy on near-black: ~7:1
+    // instead of borderline ~4.3:1. Large display text was fine; the
+    // small explanatory lines in Settings were not.
+    textMuted: Color(0xFF8296AD),
     inputBg: Color(0xCC000000),
     glass: Color(0x14FFFFFF),
     glassHighlight: Color(0x2EFFFFFF),

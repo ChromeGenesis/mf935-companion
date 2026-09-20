@@ -122,6 +122,10 @@ class _UssdTabState extends State<UssdTab> {
     });
   }
 
+  void _clearAll() {
+    setState(() => _codeCtrl.clear());
+  }
+
   Future<void> _send() async {
     final code = ZteClient.normalizeUssd(_codeCtrl.text);
     if (!ZteClient.isValidUssd(code)) {
@@ -219,9 +223,69 @@ class _UssdTabState extends State<UssdTab> {
     if (mounted) setState(() => _last = null);
   }
 
-  /// Dialpad grid + a dialer-style delete key riding beneath it,
-  /// bottom-right like a normal keypad. One build path for both
-  /// placements (SSOT).
+  /// Stock-dialer keypad (SSOT): borderless keys with a big digit +
+  /// ITU letter sublabel, then a three-slot action row — save shortcut,
+  /// gold call-style send circle, backspace (long-press clears all).
+  /// One build path for both placements.
+  static const _dialSubs = <String, String>{
+    '1': '',
+    '2': 'ABC',
+    '3': 'DEF',
+    '4': 'GHI',
+    '5': 'JKL',
+    '6': 'MNO',
+    '7': 'PQRS',
+    '8': 'TUV',
+    '9': 'WXYZ',
+    '*': '',
+    '0': '+',
+    '#': '',
+  };
+
+  Widget _dialKey(ZteColors c, String k) {
+    final sub = _dialSubs[k]!;
+    return InkWell(
+      borderRadius: BorderRadius.circular(48),
+      splashColor: c.accent.withAlpha(40),
+      highlightColor: c.accent.withAlpha(24),
+      onTap: () => _key(k),
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              k,
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
+                height: 1.1,
+              ),
+            ),
+            // Fixed slot keeps every row even whether or not the key
+            // carries a sublabel.
+            SizedBox(
+              height: 14,
+              child: sub.isEmpty
+                  ? null
+                  : Text(
+                      sub,
+                      style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.2,
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _keypad() {
     final c = context.zc;
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
@@ -232,38 +296,72 @@ class _UssdTabState extends State<UssdTab> {
           crossAxisCount: 3,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 8,
+          mainAxisSpacing: 2,
           crossAxisSpacing: 8,
-          childAspectRatio: 2.4,
+          childAspectRatio: 1.4,
+          children: [for (final k in keys) _dialKey(c, k)],
+        ),
+        const SizedBox(height: 6),
+        Row(
           children: [
-            for (final k in keys)
-              OutlinedButton(
-                onPressed: () => _key(k),
-                style: OutlinedButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  k,
-                  style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+            Expanded(
+              child: Center(
+                child: IconButton(
+                  tooltip: 'Save as shortcut',
+                  onPressed: _busy ? null : () => _editSaved(),
+                  icon: Icon(
+                    Icons.bookmark_add_outlined,
+                    size: 24,
+                    color: c.accentText,
                   ),
                 ),
               ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            const Spacer(),
-            OutlinedButton.icon(
-              onPressed: _codeCtrl.text.isEmpty ? null : _backspace,
-              icon: const Icon(Icons.backspace_outlined, size: 16),
-              label: const Text('Delete'),
+            ),
+            Expanded(
+              child: Center(
+                child: Material(
+                  color: _busy ? c.textMuted : c.accent,
+                  shape: const CircleBorder(),
+                  elevation: 0,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _busy ? null : _send,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: _busy
+                          ? SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  c.onAccent,
+                                ),
+                              ),
+                            )
+                          : Icon(
+                              Icons.call,
+                              size: 28,
+                              color: c.onAccent,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: IconButton(
+                  tooltip: 'Delete (long-press clears all)',
+                  onPressed: _codeCtrl.text.isEmpty ? null : _backspace,
+                  onLongPress: _codeCtrl.text.isEmpty ? null : _clearAll,
+                  icon: Icon(
+                    Icons.backspace_outlined,
+                    size: 24,
+                    color: c.textPrimary,
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -283,40 +381,38 @@ class _UssdTabState extends State<UssdTab> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SectionLabel('Send USSD'),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _codeCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration: InputDecoration(
-                    labelText: 'USSD code',
-                    hintText: '*312#',
-                    isDense: true,
-                    errorText: codeValid ? null : 'Codes look like *123#',
-                  ),
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _send(),
-                ),
+          // Dialer display (stock-phone parity): big, centered,
+          // borderless entry with an amber cursor. Validation rides
+          // underneath as the only chrome.
+          TextField(
+            controller: _codeCtrl,
+            keyboardType: TextInputType.phone,
+            textAlign: TextAlign.center,
+            cursorColor: c.accent,
+            cursorWidth: 2.5,
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 30,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.5,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+            decoration: InputDecoration(
+              hintText: '*312#',
+              hintStyle: TextStyle(
+                color: c.textMuted.withAlpha(140),
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
               ),
-              const SizedBox(width: 8),
-              // Send + Cancel ride together on the right.
-              ElevatedButton(
-                onPressed: _busy ? null : _send,
-                child: _busy
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Send'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _busy ? null : _cancel,
-                child: const Text('Cancel'),
-              ),
-            ],
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              errorText: codeValid ? null : 'Codes look like *123#',
+              errorStyle: const TextStyle(fontSize: 12),
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _send(),
           ),
           const SizedBox(height: 8),
           Container(
@@ -366,7 +462,13 @@ class _UssdTabState extends State<UssdTab> {
           ],
           const SizedBox(height: 12),
           _keypad(),
-          const SizedBox(height: 10),
+          Center(
+            child: TextButton(
+              onPressed: _busy ? null : _cancel,
+              child: const Text('Cancel session', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+          const SizedBox(height: 4),
           SavedUssdSection(
             saved: _saved,
             busy: _busy,

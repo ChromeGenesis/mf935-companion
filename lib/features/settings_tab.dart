@@ -40,6 +40,7 @@ class SettingsTab extends StatefulWidget {
   final List<String> logLines;
   final VoidCallback onClearLog;
   final Future<void> Function() onExportDiagnostics;
+  final VoidCallback onTestAlert;
   final Map<String, String> unsupported;
 
   // Raw balance-reply archive (owned by the shell, fed by StatusTab).
@@ -77,6 +78,7 @@ class SettingsTab extends StatefulWidget {
     required this.logLines,
     required this.onClearLog,
     required this.onExportDiagnostics,
+    required this.onTestAlert,
     required this.balanceRawLog,
     required this.onClearBalanceLog,
     required this.log,
@@ -246,6 +248,7 @@ class _SettingsTabState extends State<SettingsTab> {
       lines: widget.logLines,
       onClear: widget.onClearLog,
       onExport: widget.onExportDiagnostics,
+      onTestAlert: widget.onTestAlert,
       unsupported: widget.unsupported,
     );
 

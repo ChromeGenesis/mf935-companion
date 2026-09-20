@@ -292,6 +292,66 @@ void main() {
     expect(overallLabel(null), 'Waiting');
   });
 
+  test('Signal parser tries SINR aliases, decimals, sentinels', () {
+    final at = DateTime(2026, 1, 1);
+    // Primary alias wins.
+    var s = parseSignalSample({
+      'lte_rsrp': '-95',
+      'lte_rsrq': '-11',
+      'lte_sinr': '14',
+      'lte_snr': '3',
+      'rssi': '-70',
+      'rscp': '-80',
+      'ecio': '-7',
+    }, at);
+    expect(s.rsrp, -95);
+    expect(s.rsrq, -11);
+    expect(s.sinr, 14); // lte_sinr beats stale lte_snr
+    expect(s.rssi, -70);
+    expect(s.rscp, -80);
+    expect(s.ecio, -7);
+    // Fallback alias when the primary key is absent.
+    s = parseSignalSample({'lte_snr': '9', 'rssi': '-70'}, at);
+    expect(s.sinr, 9);
+    expect(s.rsrp, isNull);
+    // Decimal firmware answers round instead of failing.
+    s = parseSignalSample(
+      {'lte_rsrp': '-95.0', 'lte_rsrq': '-11.5', 'rssi': '-70'},
+      at,
+    );
+    expect(s.rsrp, -95);
+    expect(s.rsrq, -12);
+    // Sentinels and garbage stay null, never invented.
+    s = parseSignalSample(
+      {'lte_rsrp': '0', 'lte_rsrq': '', 'lte_sinr': 'abc', 'rssi': '5'},
+      at,
+    );
+    expect(s.rsrp, isNull);
+    expect(s.rsrq, isNull);
+    expect(s.sinr, isNull);
+    expect(s.rssi, isNull); // positive dBm is implausible
+    // Empty reply: all null, score null, honest labels.
+    s = parseSignalSample({}, at);
+    expect(signalOverallScore(s), isNull);
+    expect(rsrqLabel(s.rsrq), 'not reported');
+    expect(sinrLabel(s.sinr), 'not reported');
+    expect(rssiLabel(s.rssi), 'not reported');
+    expect(rssiScore(s.rssi), -1);
+  });
+
+  test('RSSI substitute bands for dead LTE quality', () {
+    expect(rssiLabel(-60), 'Excellent');
+    expect(rssiLabel(-70), 'Good');
+    expect(rssiLabel(-80), 'Fair');
+    expect(rssiLabel(-90), 'Poor');
+    expect(rssiScore(-60), 5);
+    expect(rssiScore(-70), 4);
+    expect(rssiScore(-80), 3);
+    expect(rssiScore(-90), 2);
+    expect(rssiScore(-100), 1);
+    expect(rssiScore(null), -1);
+  });
+
   test('Speed test math: median + throughput', () {    expect(medianOf([3.0]), 3.0);
     expect(medianOf([1.0, 3.0, 2.0]), 2.0);
     expect(medianOf([1.0, 2.0, 3.0, 4.0]), 2.5);

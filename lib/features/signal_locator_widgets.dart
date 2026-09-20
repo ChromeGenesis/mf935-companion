@@ -3,11 +3,14 @@ library;
 /// Signal-locator UI (SSOT): live RSRP/RSRQ/SINR readout + 3GPP-grounded
 /// placement guidance. Two entry shells — [SignalLocatorBody] inside the
 /// desktop glass modal, [SignalLocatorSheet] as the mobile bottom sheet.
-/// One auto-refresh (5s) keeps the numbers live while the user walks the
-/// router around; everything is cancellable and read-only.
+/// A 1s fast poll keeps the numbers live while the user walks the
+/// router around (with backoff when the modem stops answering);
+/// haptic + visual pulses confirm every genuine movement.
+/// Everything is cancellable and read-only.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/signal_locator.dart';
 import '../core/theme.dart';
@@ -35,10 +38,34 @@ class _SignalLocatorBodyState extends State<SignalLocatorBody> {
   bool _fetching = false;
   bool _manualBusy = false;
 
+  /// Consecutive failed polls. At 3+ the loop skips 4 of 5 ticks so a
+  /// dead modem isn't hammered; the first success resets to fast poll.
+  int _failStreak = 0;
+  int _ticks = 0;
+
+  /// Last sample, for change detection: haptics fire on genuine
+  /// movement (a metric actually moved), never on identical polls.
+  SignalSample? _prev;
+
+  /// Successful polls this session — drives the scan-pulse dot.
+  int _pollCount = 0;
+
+  /// Consecutive polls with neither RSRQ nor SINR. At [_deadAfter] the
+  /// firmware is declared unable to report LTE quality and the dead
+  /// tiles are swapped for live RSSI. Any arrival clears it instantly.
+  int _nullQualityStreak = 0;
+  bool _lteQualityDead = false;
+  static const _deadAfter = 8;
+
   /// Strongest RSRP (least negative dBm) seen while this tool is open.
   /// Session-scoped: walking the router around and watching the live
   /// reading beat — or miss — this mark is the whole walk-test.
   int? _bestRsrp;
+
+  /// Fast poll: the modem answers a 9-key GET in well under a second
+  /// on LAN, so 1s is near-instant without flooding it. (The stock web
+  /// UI polls at a comparable cadence.)
+  static const _fastPoll = Duration(seconds: 1);
 
   @override
   void initState() {
@@ -46,10 +73,7 @@ class _SignalLocatorBodyState extends State<SignalLocatorBody> {
     _refresh();
     // Background polls are silent: no spinner, no layout churn — the
     // numbers + gauge just glide to their new values.
-    _timer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _refresh(silent: true),
-    );
+    _timer = Timer.periodic(_fastPoll, (_) => _refresh(silent: true));
   }
 
   @override
@@ -60,19 +84,50 @@ class _SignalLocatorBodyState extends State<SignalLocatorBody> {
 
   Future<void> _refresh({bool silent = false}) async {
     if (_fetching || !mounted) return;
+    _ticks++;
+    // Backoff: while the modem isn't answering, poll at ~1/5 rate.
+    if (silent && _failStreak >= 3 && _ticks % 5 != 0) return;
     _fetching = true;
     if (!silent) setState(() => _manualBusy = true);
     try {
-      final s = await SignalSample.fromClient(widget.client);
+      final s = await SignalSample.fromClient(
+        widget.client,
+      ).timeout(const Duration(seconds: 8));
       if (!mounted) return;
+      _failStreak = 0;
+      _pollCount++;
+      if (s.rsrq != null || s.sinr != null) {
+        _nullQualityStreak = 0;
+        _lteQualityDead = false;
+      } else {
+        _nullQualityStreak++;
+        if (_nullQualityStreak >= _deadAfter) _lteQualityDead = true;
+      }
+      final p = _prev;
+      final moved =
+          p == null ||
+          p.rsrp != s.rsrp ||
+          p.rsrq != s.rsrq ||
+          p.sinr != s.sinr ||
+          p.rssi != s.rssi;
+      _prev = s;
       if (s.rsrp != null && (_bestRsrp == null || s.rsrp! > _bestRsrp!)) {
         _bestRsrp = s.rsrp;
+        // New session best: unmistakable double-tap feel.
+        HapticFeedback.mediumImpact();
+      } else if (moved) {
+        // Genuine movement: light tick confirms tracking is alive.
+        HapticFeedback.lightImpact();
       }
       // One feed write rebuilds the content once — no busy-flag dance
       // on silent polls, so nothing flashes or shifts.
       widget.signalFeed.value = s;
+      if (!silent) setState(() {});
     } catch (_) {
-      // Read-only tool: a failed poll just leaves the last sample up.
+      // Read-only tool: a failed poll just leaves the last sample up
+      // and slows the loop until the modem answers again.
+      _failStreak++;
+      if (!silent && mounted) setState(() {});
     } finally {
       _fetching = false;
       if (!silent && mounted) setState(() => _manualBusy = false);
@@ -88,6 +143,11 @@ class _SignalLocatorBodyState extends State<SignalLocatorBody> {
         busy: _manualBusy,
         onRefresh: _refresh,
         bestRsrp: _bestRsrp,
+        // Keyed by poll count: every successful sample re-pings the
+        // scan dot even when the numbers didn't move.
+        scanPing: _pollCount,
+        retrying: _failStreak > 0,
+        hideQuality: _lteQualityDead,
       ),
     );
   }
@@ -201,12 +261,28 @@ class SignalLocatorContent extends StatelessWidget {
   /// Strongest RSRP seen while the tool is open (session best).
   final int? bestRsrp;
 
+  /// Increments on every successful poll — re-pings the scan dot even
+  /// when the numbers didn't move, proving the loop is alive.
+  final int scanPing;
+
+  /// True while polls are failing (backoff active): the header says
+  /// RETRYING instead of SCANNING.
+  final bool retrying;
+
+  /// True when the firmware has gone [_deadAfter] polls without RSRQ
+  /// or SINR: the dead tiles are replaced by live RSSI instead of
+  /// staring back as permanent "—".
+  final bool hideQuality;
+
   const SignalLocatorContent({
     super.key,
     required this.sample,
     required this.busy,
     required this.onRefresh,
     this.bestRsrp,
+    this.scanPing = 0,
+    this.retrying = false,
+    this.hideQuality = false,
   });
 
   @override
@@ -231,13 +307,32 @@ class SignalLocatorContent extends StatelessWidget {
         // ── Live metrics ──
         Row(
           children: [
-            Icon(Icons.monitor_heart_outlined, size: 14, color: c.textMuted),
+            // Scan pulse: re-pings on every successful poll (keyed by
+            // scanPing) so each tracked step flashes — the visual half
+            // of the per-step feedback (haptics are the other half).
+            TweenAnimationBuilder<double>(
+              key: ValueKey<int>(scanPing),
+              tween: Tween<double>(begin: 1, end: 0.35),
+              duration: const Duration(milliseconds: 900),
+              builder: (ctx, v, _) => Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (retrying ? c.danger : c.live).withAlpha(
+                    (140 + (115 * v)).round().clamp(0, 255),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
                 s == null
                     ? 'LIVE METRICS'
-                    : 'LIVE METRICS · ${ZteClient.timeAgo(s.at)}',
+                    : retrying
+                    ? 'RETRYING · ${ZteClient.timeAgo(s.at)}'
+                    : 'SCANNING · 1s · ${ZteClient.timeAgo(s.at)}',
                 style: TextStyle(
                   color: c.textMuted,
                   fontSize: 11,
@@ -287,27 +382,47 @@ class SignalLocatorContent extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Expanded(
-              child: _MetricTile(
-                label: 'RSRQ',
-                value: s?.rsrq == null ? '—' : '${s!.rsrq} dB',
-                quality: rsrqLabel(s?.rsrq),
-                level: rsrqScore(s?.rsrq),
-                detail: 'Signal quality / load',
+            if (!hideQuality) ...[
+              Expanded(
+                child: _MetricTile(
+                  label: 'RSRQ',
+                  value: s?.rsrq == null ? '—' : '${s!.rsrq} dB',
+                  quality: rsrqLabel(s?.rsrq),
+                  level: rsrqScore(s?.rsrq),
+                  detail: 'Signal quality / load',
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _MetricTile(
-                label: 'SINR',
-                value: s?.sinr == null ? '—' : '${s!.sinr} dB',
-                quality: sinrLabel(s?.sinr),
-                level: sinrScore(s?.sinr),
-                detail: 'Signal vs interference',
+              const SizedBox(width: 8),
+              Expanded(
+                child: _MetricTile(
+                  label: 'SINR',
+                  value: s?.sinr == null ? '—' : '${s!.sinr} dB',
+                  quality: sinrLabel(s?.sinr),
+                  level: sinrScore(s?.sinr),
+                  detail: 'Signal vs interference',
+                ),
               ),
-            ),
+            ] else
+              Expanded(
+                child: _MetricTile(
+                  label: 'RSSI',
+                  value: s?.rssi == null ? '—' : '${s!.rssi} dBm',
+                  quality: rssiLabel(s?.rssi),
+                  level: rssiScore(s?.rssi),
+                  detail: 'Wideband received power (live substitute)',
+                ),
+              ),
           ],
         ),
+        if (hideQuality && s != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            'RSRQ/SINR are not reported by this firmware — showing live '
+            'RSSI instead. They return automatically if the modem starts '
+            'answering.',
+            style: TextStyle(color: c.textMuted, fontSize: 11, height: 1.45),
+          ),
+        ],
 
         // ── Guidance ──
         const SizedBox(height: 14),
@@ -407,8 +522,9 @@ class SignalLocatorContent extends StatelessWidget {
                 'The MF935 has omnidirectional antennas — it cannot point '
                 'at a tower, so the tool teaches by measurement: (1) hold '
                 'the router at chest height near a window and note RSRP; '
-                '(2) move one meter at a time around the room, pausing ~10s '
-                'at each spot for the reading to settle; (3) keep the spot '
+                '(2) move one meter at a time around the room, pausing '
+                '~2–3s at each spot — the dot flashes and the device ticks '
+                'on every tracked step; (3) keep the spot '
                 'with the highest RSRP, then fine-tune with quarter turns '
                 'watching SINR/RSRQ — orientation shifts polarization '
                 'against interference even when position is fixed.',

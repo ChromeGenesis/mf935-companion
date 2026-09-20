@@ -123,6 +123,7 @@ class DiagnosticsPanel extends StatelessWidget {
   final List<String> lines;
   final VoidCallback? onClear;
   final VoidCallback? onExport;
+  final VoidCallback? onTestAlert;
   final Map<String, String> unsupported;
 
   const DiagnosticsPanel({
@@ -130,6 +131,7 @@ class DiagnosticsPanel extends StatelessWidget {
     required this.lines,
     this.onClear,
     this.onExport,
+    this.onTestAlert,
     this.unsupported = const {},
   });
 
@@ -165,6 +167,15 @@ class DiagnosticsPanel extends StatelessWidget {
                   ),
                 ),
               if (onExport != null) const SizedBox(width: 8),
+              if (onTestAlert != null)
+                InkWell(
+                  onTap: onTestAlert,
+                  child: Text(
+                    'test alert',
+                    style: TextStyle(color: c.accentText, fontSize: 11.5),
+                  ),
+                ),
+              if (onTestAlert != null) const SizedBox(width: 8),
               InkWell(
                 onTap: onClear,
                 child: Text(
@@ -184,10 +195,29 @@ class DiagnosticsPanel extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: c.danger.withAlpha(60)),
               ),
-              child: Text(
-                'Unsupported on this firmware: ${unsupported.keys.join(', ')} — '
-                'not retried. See export for reasons.',
-                style: TextStyle(color: c.danger, fontSize: 11.5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Unsupported on this firmware: ${unsupported.keys.join(', ')} — '
+                      'not retried. See export for reasons.',
+                      style: TextStyle(color: c.danger, fontSize: 11.5),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const ExplainTip(
+                    title: 'Unsupported commands',
+                    body:
+                        'Some modem commands only exist on certain firmware '
+                        'builds. When the router rejects one, the app latches '
+                        'it here and stops sending it — retrying a command '
+                        'the firmware will never accept only spams the log '
+                        'and risks lockouts. The full modem reply and the '
+                        'suggested next step for each rejection live in the '
+                        'diagnostic export.',
+                  ),
+                ],
               ),
             ),
           ],

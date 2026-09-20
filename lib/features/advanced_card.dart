@@ -371,6 +371,21 @@ class _AdvancedCardState extends State<AdvancedCard> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                const ExplainTip(
+                  title: 'Capability discovery',
+                  body:
+                      'One read-only status request asking the firmware for '
+                      '37 known keys (signal, battery, traffic, identity). '
+                      'Keys that answer with a value count as supported; '
+                      'keys that come back empty are "silent" — the modem '
+                      'either hides them on this network mode (e.g. LTE-only '
+                      'keys while on 3G) or this firmware build never '
+                      'implemented them. Silent keys are skipped by polls so '
+                      'the app never spams requests that can never answer. '
+                      'Re-probe after a firmware update or a network-mode '
+                      'change; the locator only trusts metrics seen here.',
+                ),
+                const SizedBox(width: 4),
                 OutlinedButton(
                   onPressed: !widget.connected || _busy ? null : _probe,
                   child: Text(_busy ? 'Probing…' : 'Probe'),

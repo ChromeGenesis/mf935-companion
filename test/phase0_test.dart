@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:zte_mf935_app/core/capability.dart';
 import 'package:zte_mf935_app/core/diagnostics.dart';
+import 'package:zte_mf935_app/core/notifications.dart';
 
 void main() {
   test('CapabilityRegistry latches once, never spams', () {
@@ -66,5 +67,80 @@ void main() {
     );
     // Capped at 40 lines.
     expect((json['recent_events'] as List).length, 40);
+  });
+
+  test('Notification dedup cuts identical consecutive spam only', () {
+    final t0 = DateTime(2026, 1, 1, 12);
+    // No history: never a duplicate.
+    expect(
+      isDuplicateAlert(
+        lastTitle: null,
+        lastBody: null,
+        lastAt: null,
+        title: 'A',
+        body: 'b',
+        now: t0,
+      ),
+      isFalse,
+    );
+    // Identical + inside window: suppressed.
+    expect(
+      isDuplicateAlert(
+        lastTitle: 'Placement degraded',
+        lastBody: 'signal fell from 5/5 to 3/5',
+        lastAt: t0,
+        title: 'Placement degraded',
+        body: 'signal fell from 5/5 to 3/5',
+        now: t0.add(const Duration(minutes: 9)),
+      ),
+      isTrue,
+    );
+    // Same text after the window: genuine re-occurrence, sent.
+    expect(
+      isDuplicateAlert(
+        lastTitle: 'Placement degraded',
+        lastBody: 'signal fell from 5/5 to 3/5',
+        lastAt: t0,
+        title: 'Placement degraded',
+        body: 'signal fell from 5/5 to 3/5',
+        now: t0.add(const Duration(minutes: 11)),
+      ),
+      isFalse,
+    );
+    // Either half differs: not consecutive-identical, sent.
+    expect(
+      isDuplicateAlert(
+        lastTitle: 'Placement degraded',
+        lastBody: 'signal fell from 5/5 to 3/5',
+        lastAt: t0,
+        title: 'Placement degraded',
+        body: 'signal fell from 5/5 to 2/5',
+        now: t0.add(const Duration(minutes: 1)),
+      ),
+      isFalse,
+    );
+    expect(
+      isDuplicateAlert(
+        lastTitle: 'Other',
+        lastBody: 'signal fell from 5/5 to 3/5',
+        lastAt: t0,
+        title: 'Placement degraded',
+        body: 'signal fell from 5/5 to 3/5',
+        now: t0.add(const Duration(minutes: 1)),
+      ),
+      isFalse,
+    );
+    // Clock skew fails open: when in doubt, send.
+    expect(
+      isDuplicateAlert(
+        lastTitle: 'A',
+        lastBody: 'b',
+        lastAt: t0.add(const Duration(minutes: 5)),
+        title: 'A',
+        body: 'b',
+        now: t0,
+      ),
+      isFalse,
+    );
   });
 }

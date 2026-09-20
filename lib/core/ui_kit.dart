@@ -917,3 +917,41 @@ class ZCheck extends StatelessWidget {
     );
   }
 }
+
+/// Obscure-metric explainer (SSOT): a small info affordance that opens
+/// a glass sheet with a plain-language "what is this and why care".
+/// Use beside any diagnostic line a non-expert would squint at.
+class ExplainTip extends StatelessWidget {
+  final String title;
+  final String body;
+
+  const ExplainTip({super.key, required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return Tooltip(
+      message: title,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(99),
+        onTap: () => showGlassModal<void>(
+          context,
+          icon: Icons.info_outline,
+          title: title,
+          body: Text(
+            body,
+            style: TextStyle(
+              color: c.textSecondary,
+              fontSize: 13,
+              height: 1.55,
+            ),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(Icons.info_outline, size: 15, color: c.textMuted),
+        ),
+      ),
+    );
+  }
+}

@@ -10,6 +10,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'features/dashboard.dart';
+import 'core/notifications.dart';
 import 'core/platform.dart';
 import 'core/theme.dart';
 
@@ -44,6 +45,9 @@ Future<void> main() async {
     android: AndroidInitializationSettings('@mipmap/ic_launcher'),
   );
   await _notifications.initialize(settings: initSettings);
+  // Android 13+ drops show() silently until the runtime grant exists —
+  // ask once at boot so alerts actually appear.
+  await requestNotificationPermission(_notifications);
 
   if (isDesktop) {
     await trayManager.setToolTip('MiFi Companion');

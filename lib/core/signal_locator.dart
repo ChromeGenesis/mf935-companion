@@ -29,39 +29,79 @@ class SignalSample {
   /// available on this firmware family; the fallback metric.
   final int? rssi;
 
+  /// Received Signal Code Power, dBm (3G). Reported by the stock UI's
+  /// own device-info query; sharpens the 3G fallback guidance.
+  final int? rscp;
+
+  /// Energy per Chip over Interference, dB (3G quality). Queried
+  /// alongside RSCP; the 3G counterpart to RSRQ/SINR.
+  final int? ecio;
+
   const SignalSample({
     required this.at,
     this.rsrp,
     this.rsrq,
     this.sinr,
     this.rssi,
+    this.rscp,
+    this.ecio,
   });
 
   /// Fetch the current metrics from the modem. LTE fields are
   /// best-effort — 3G/2G camps report RSSI only, which is normal.
   static Future<SignalSample> fromClient(ZteClient client) async {
-    final m = await client.getStatus(
-      cmds: const ['lte_rsrp', 'lte_rsrq', 'lte_snr', 'rssi', 'network_type'],
-    );
-    int? dbm(String key) {
-      final v = int.tryParse('${m[key] ?? ''}'.replaceAll('.0', ''));
-      // Firmware sentinel: 0 or implausible values mean "not reported".
-      if (v == null || v == 0 || v < -150 || v > 0) return null;
-      return v;
-    }
-
-    return SignalSample(
-      at: DateTime.now(),
-      rsrp: dbm('lte_rsrp'),
-      rsrq: dbm('lte_rsrq'),
-      sinr: () {
-        final v = int.tryParse('${m['lte_snr'] ?? ''}'.replaceAll('.0', ''));
-        if (v == null || v == 0) return null;
-        return v;
-      }(),
-      rssi: dbm('rssi'),
-    );
+    final m = await client.getStatus(cmds: const [
+      'lte_rsrp',
+      'lte_rsrq',
+      // SINR alias probe: stock firmware families disagree on the key
+      // (`lte_sinr` vs `lte_snr` vs bare `sinr`), and the stock web UI
+      // never queries any of them — so a single-key request reads
+      // permanently static. First non-empty alias wins.
+      'lte_sinr',
+      'lte_snr',
+      'sinr',
+      'rssi',
+      'rscp',
+      'ecio',
+      'network_type',
+    ]);
+    return parseSignalSample(m, DateTime.now());
   }
+}
+
+/// Alias-tolerant metric extraction from one goform GET reply. Pure +
+/// tested. Never invents data: unknown keys stay null and the UI says
+/// "not reported".
+SignalSample parseSignalSample(Map<String, dynamic> m, DateTime at) {
+  int? num(String key, {int min = -150, int max = 0}) {
+    final raw = '${m[key] ?? ''}'.trim();
+    if (raw.isEmpty) return null;
+    // Some firmwares answer decimals ("-11.5", "-95.0").
+    final v = double.tryParse(raw.replaceAll(',', '.'));
+    if (v == null || !v.isFinite) return null;
+    final r = v.round();
+    // Firmware sentinel: 0 or implausible values mean "not reported".
+    if (r == 0 || r < min || r > max) return null;
+    return r;
+  }
+
+  int? first(List<String> keys, {int min = -150, int max = 0}) {
+    for (final k in keys) {
+      final v = num(k, min: min, max: max);
+      if (v != null) return v;
+    }
+    return null;
+  }
+
+  return SignalSample(
+    at: at,
+    rsrp: first(['lte_rsrp']),
+    rsrq: first(['lte_rsrq'], min: -40),
+    sinr: first(['lte_sinr', 'lte_snr', 'sinr'], min: -30, max: 50),
+    rssi: first(['rssi']),
+    rscp: first(['rscp']),
+    ecio: first(['ecio'], min: -40),
+  );
 }
 
 /// Standard 3GPP-aligned interpretation bands (TS 36.214 definitions,
@@ -69,6 +109,8 @@ class SignalSample {
 /// - RSRP: > -80 excellent, -80..-90 good, -90..-100 fair, < -100 poor
 /// - RSRQ: > -10 excellent, -10..-15 good, -15..-20 fair, < -20 poor
 /// - SINR: > 20 excellent, 13..20 good, 6..13 fair, < 6 poor
+/// - RSSI: >= -65 excellent, -65..-75 good, -75..-85 fair, < -85 poor
+///   (substitute tile when the firmware never reports RSRQ/SINR).
 String rsrpLabel(int? v) {
   if (v == null) return 'not reported';
   if (v >= -80) return 'Excellent';
@@ -90,6 +132,14 @@ String sinrLabel(int? v) {
   if (v >= 20) return 'Excellent';
   if (v >= 13) return 'Good';
   if (v >= 6) return 'Fair';
+  return 'Poor';
+}
+
+String rssiLabel(int? v) {
+  if (v == null) return 'not reported';
+  if (v >= -65) return 'Excellent';
+  if (v >= -75) return 'Good';
+  if (v >= -85) return 'Fair';
   return 'Poor';
 }
 
@@ -118,6 +168,15 @@ int sinrScore(int? v) {
   if (v >= 13) return 4;
   if (v >= 6) return 3;
   return 2;
+}
+
+int rssiScore(int? v) {
+  if (v == null) return -1;
+  if (v >= -65) return 5;
+  if (v >= -75) return 4;
+  if (v >= -85) return 3;
+  if (v >= -95) return 2;
+  return 1;
 }
 
 /// Overall 1..5 reception score: the mean of the reported metric bands
@@ -182,13 +241,20 @@ List<PlacementTip> placementTips(SignalSample s) {
   // No LTE metrics at all: we are likely on 3G — say so honestly.
   if (rsrp == null && rsrq == null && sinr == null) {
     if (rssi != null) {
+      final rscp = s.rscp;
+      final ecio = s.ecio;
+      final extras = [
+        if (rscp != null) 'RSCP $rscp dBm',
+        if (ecio != null) 'ECIO $ecio dB',
+      ].join(' plus ');
       tips.add(
         PlacementTip(
           icon: Icons.info_outline,
           title: 'LTE metrics unavailable',
           detail:
               'The modem did not report RSRP/RSRQ/SINR (device may be '
-              'camped on 3G/2G). Only wideband RSSI is available: '
+              'camped on 3G/2G). Only wideband RSSI is available'
+              '${extras.isEmpty ? '' : ' plus $extras'}: '
               'positioning advice below uses that weaker proxy. Move the '
               'router and watch the value — higher (less negative) dBm '
               'is better.',

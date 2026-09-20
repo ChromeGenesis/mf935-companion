@@ -152,9 +152,31 @@ class _MonitorModesCardState extends State<MonitorModesCard> {
                 Icon(Icons.battery_std_outlined, size: 15, color: c.textMuted),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    'Drain rate',
-                    style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          'Drain rate',
+                          style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ),
+                      const ExplainTip(
+                        title: 'Drain rate',
+                        body:
+                            'Battery percent lost per hour, computed from '
+                            'samples the poller records on every tick while '
+                            'the MiFi is unplugged. Needs at least two '
+                            'samples spanning 5+ minutes — until then it '
+                            'says "collecting…" rather than guessing. '
+                            '"Holding charge" means the level is flat or '
+                            'rising. Travel mode slows sampling, so the '
+                            'estimate reacts slower there too.',
+                      ),
+                    ],
                   ),
                 ),
                 Text(

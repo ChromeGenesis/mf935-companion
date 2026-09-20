@@ -350,6 +350,22 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _notifyNow(String title, String body) =>
       showAlert(_notifications, title, body);
 
+  /// Fires one real notification through the full OS path so delivery
+  /// can be verified on demand (Settings → Diagnostics → test alert).
+  /// The snackbar confirms dispatch; the toast itself confirms the OS
+  /// grant + channel. If no toast appears, the OS blocked it — see log.
+  void _testAlertNow() {
+    _notifyNow('MiFi Companion test', 'If you see this, alerts work.');
+    _logLine('test alert dispatched — confirm the OS toast appeared');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Test alert sent — check for the system toast'),
+        ),
+      );
+    }
+  }
+
   /// Latch a firmware rejection once: capability matrix + log, no retries.
   void _markUnsupported(String goformId, String reason) {
     final isNew = capabilities.markUnsupported(goformId, reason);
@@ -652,6 +668,7 @@ class _DashboardPageState extends State<DashboardPage>
       logLines: _log,
       onClearLog: () => setState(() => _log.clear()),
       onExportDiagnostics: _exportDiagnostics,
+      onTestAlert: _testAlertNow,
       unsupported: capabilities.unsupported,
       balanceRawLog: _balanceRawLog,
       onClearBalanceLog: () => setState(() => _balanceRawLog.clear()),
