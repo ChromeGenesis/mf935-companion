@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'status_cards.dart';
+import 'scout_card.dart';
 import '../core/theme.dart';
 import 'speed_test_card.dart';
 import '../core/session_recovery.dart' as recovery;
@@ -328,6 +329,14 @@ class StatusTabState extends State<StatusTab> {
         ),
         const SizedBox(height: 10),
         SpeedTestCard(
+          connected: widget.connected,
+          log: widget.log,
+        ),
+        const SizedBox(height: 10),
+        // Scout measures the radio from wherever the MiFi is put, so it
+        // sits with the other measurement tool rather than in Settings.
+        NetworkScoutCard(
+          client: widget.client,
           connected: widget.connected,
           log: widget.log,
         ),
