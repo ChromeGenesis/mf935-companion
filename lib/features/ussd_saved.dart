@@ -11,22 +11,43 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/dialogs.dart';
 import '../core/theme.dart';
+import '../core/ussd_steps.dart';
 import '../core/zte_client.dart';
 
 /// A saved USSD shortcut. Codes auto-save on send; the UI also allows
 /// manual add / edit (long-press a chip) / delete (chip ✕, confirmed).
+///
+/// [steps] are the menu answers that follow the code (`*312#` then `3`,
+/// then `1`). A shortcut with steps is run as one confirmed action; a
+/// plain code stays exactly as before — remembered, recalled, never
+/// auto-sent.
 class UssdSaved {
   final String code;
   final String label;
+  final List<String> steps;
 
-  const UssdSaved({required this.code, this.label = ''});
+  UssdSaved({required this.code, this.label = '', List<String>? steps})
+    : steps = List.unmodifiable(steps ?? const []);
 
   String get displayName => label.trim().isEmpty ? code : label.trim();
 
-  Map<String, dynamic> toJson() => {'code': code, 'label': label};
+  /// True when this shortcut needs a confirmation sheet before it runs.
+  bool get isMultiStep => steps.isNotEmpty;
 
-  factory UssdSaved.fromJson(Map<String, dynamic> j) =>
-      UssdSaved(code: '${j['code'] ?? ''}', label: '${j['label'] ?? ''}');
+  /// The shortcut as the runner wants it.
+  UssdShortcut get shortcut => UssdShortcut(code, steps);
+
+  Map<String, dynamic> toJson() => {
+    'code': code,
+    'label': label,
+    if (steps.isNotEmpty) 'steps': steps,
+  };
+
+  factory UssdSaved.fromJson(Map<String, dynamic> j) => UssdSaved(
+    code: '${j['code'] ?? ''}',
+    label: '${j['label'] ?? ''}',
+    steps: (j['steps'] as List?)?.map((e) => '$e').toList(),
+  );
 }
 
 const _savedKey = 'ussd_saved';
@@ -62,7 +83,11 @@ Future<void> saveUssdSaved(List<UssdSaved> saved) async {
 /// edit survives the next send), most-recent first, capped.
 List<UssdSaved> rememberUssdCode(List<UssdSaved> saved, String code) {
   final existing = saved.where((s) => s.code == code).firstOrNull;
-  final entry = UssdSaved(code: code, label: existing?.label ?? '');
+  final entry = UssdSaved(
+    code: code,
+    label: existing?.label ?? '',
+    steps: existing?.steps,
+  );
   return [
     entry,
     ...saved.where((s) => s.code != code),
@@ -169,6 +194,11 @@ class SavedUssdSection extends StatelessWidget {
   final List<UssdSaved> saved;
   final bool busy;
   final ValueChanged<String> onPickCode;
+
+  /// Called when a saved entry itself is picked (the tab decides whether
+  /// that means "recall" or "run this script").
+  final ValueChanged<UssdSaved> onPickSaved;
+
   final VoidCallback onAdd;
   final ValueChanged<UssdSaved> onEdit;
   final Future<void> Function(String code) onRemoveConfirm;
@@ -178,6 +208,7 @@ class SavedUssdSection extends StatelessWidget {
     required this.saved,
     required this.busy,
     required this.onPickCode,
+    required this.onPickSaved,
     required this.onAdd,
     required this.onEdit,
     required this.onRemoveConfirm,
@@ -214,7 +245,10 @@ class SavedUssdSection extends StatelessWidget {
                         child: _SavedChip(
                           saved: s,
                           busy: busy,
-                          onTap: () => onPickCode(s.code),
+                          onTap: () {
+                            onPickSaved(s);
+                            onPickCode(s.code);
+                          },
                           onLongPress: () => onEdit(s),
                           onDelete: () => onRemoveConfirm(s.code),
                         ),
@@ -283,6 +317,17 @@ class _SavedChip extends StatelessWidget {
                     : const [FontFeature.tabularFigures()],
               ),
             ),
+            if (saved.isMultiStep) ...[
+              const SizedBox(width: 4),
+              Text(
+                '→${saved.steps.join('→')}',
+                style: TextStyle(
+                  color: c.accentText,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
             if (hasLabel) ...[
               const SizedBox(width: 4),
               Text(
@@ -347,6 +392,9 @@ class _UssdFormState extends State<_UssdForm> {
   late final _labelCtrl = TextEditingController(
     text: widget.existing?.label ?? '',
   );
+  late final _stepsCtrl = TextEditingController(
+    text: UssdShortcut.stepsToField(widget.existing?.steps ?? const []),
+  );
   late final _codeFocus = FocusNode();
 
   @override
@@ -361,6 +409,7 @@ class _UssdFormState extends State<_UssdForm> {
   void dispose() {
     _codeCtrl.dispose();
     _labelCtrl.dispose();
+    _stepsCtrl.dispose();
     _codeFocus.dispose();
     super.dispose();
   }
@@ -368,9 +417,13 @@ class _UssdFormState extends State<_UssdForm> {
   void _submit() {
     final code = ZteClient.normalizeUssd(_codeCtrl.text);
     if (!ZteClient.isValidUssd(code)) return;
-    Navigator.of(
-      context,
-    ).pop(UssdSaved(code: code, label: _labelCtrl.text.trim()));
+    Navigator.of(context).pop(
+      UssdSaved(
+        code: code,
+        label: _labelCtrl.text.trim(),
+        steps: UssdShortcut.parseSteps(_stepsCtrl.text),
+      ),
+    );
   }
 
   @override
@@ -400,6 +453,17 @@ class _UssdFormState extends State<_UssdForm> {
           decoration: const InputDecoration(
             labelText: 'Label (optional)',
             hintText: 'e.g. "My MTN balance"',
+            isDense: true,
+          ),
+          onSubmitted: (_) => _submit(),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _stepsCtrl,
+          keyboardType: TextInputType.text,
+          decoration: const InputDecoration(
+            labelText: 'Menu steps (optional)',
+            hintText: 'e.g. 3, 1 — answered in order after the menu opens',
             isDense: true,
           ),
           onSubmitted: (_) => _submit(),

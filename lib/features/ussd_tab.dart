@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/capability.dart';
 import '../core/theme.dart';
+import '../core/ussd_steps.dart';
 import 'ussd_saved.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -345,6 +348,128 @@ class _UssdTabState extends State<UssdTab> {
       widget.log(r.success ? 'USSD reply ok' : 'USSD reply failed: ${r.error}');
     } catch (e) {
       widget.log('USSD reply error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Run a scripted shortcut as one confirmed action. Confirmation
+  /// matters: a stored sequence can go stale (the carrier renumbers its
+  /// menu) and the last step of some flows spends money, so the sheet
+  /// spells out exactly what will be typed.
+  Future<void> _runShortcut(UssdSaved saved) async {
+    if (_busy || !widget.connected) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final c = ctx.zc;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassModal(
+            icon: Icons.playlist_play,
+            title: 'Run shortcut',
+            subtitle: 'Each step is answered only if the menu still asks.',
+            body: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: c.chip,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: c.borderSubtle),
+                  ),
+                  child: SelectableText(
+                    saved.shortcut.flowLabel,
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      key: const Key('ussd-shortcut-run'),
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      icon: const Icon(Icons.play_arrow, size: 16),
+                      label: const Text('Run'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    _remember(saved.code);
+    setState(() {
+      _busy = true;
+      _last = null;
+      _showRaw = false;
+    });
+    widget.log('USSD shortcut ${saved.shortcut.flowLabel} → running…');
+    try {
+      final run = await runUssdShortcut(
+        widget.client,
+        saved.shortcut,
+        onStep: (step) {
+          // Render every intermediate menu as it lands: a scripted run
+          // that guessed wrong must be visibly wrong.
+          if (!mounted) return;
+          setState(() {
+            _last = step.reply;
+            _history = pushUssdHistory(
+              _history,
+              UssdHistoryEntry(
+                request: '↳ ${step.answer}',
+                reply: step.reply.success ? step.reply.text : step.reply.error,
+                ok: step.reply.success,
+                at: DateTime.now(),
+                rawReply: step.reply.raw,
+              ),
+            );
+          });
+          _persistHistory();
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _last = run.finalReply;
+        _replyViaKeyboard = false;
+        _history = pushUssdHistory(
+          _history,
+          UssdHistoryEntry(
+            request: saved.code,
+            reply: run.opening.success
+                ? run.opening.text
+                : run.opening.error,
+            ok: run.opening.success,
+            at: DateTime.now(),
+            rawReply: run.opening.raw,
+          ),
+        );
+      });
+      _persistHistory();
+      widget.log(describeUssdRun(saved.shortcut, run));
+      if (run.needsManualReply) {
+        widget.log('shortcut left a menu open — answer the rest by hand');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1091,6 +1216,15 @@ class _UssdTabState extends State<UssdTab> {
               busy: _busy,
               onPickCode: (code) {
                 setState(() => _codeCtrl.text = code);
+              },
+              // A scripted shortcut is one confirmed tap; a plain code
+              // only ever recalls into the field.
+              onPickSaved: (saved) {
+                if (saved.isMultiStep) {
+                  unawaited(_runShortcut(saved));
+                } else {
+                  setState(() => _codeCtrl.text = saved.code);
+                }
               },
               onAdd: () => _editSaved(),
               onEdit: (s) => _editSaved(existing: s),

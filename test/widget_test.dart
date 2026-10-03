@@ -923,7 +923,11 @@ void main() {
 
   // ── USSD console: layout + menu-mode interactions ──────────────────
 
-  Future<void> pumpUssd(WidgetTester tester, ZteClient client) async {
+  Future<void> pumpUssd(
+    WidgetTester tester,
+    ZteClient client, {
+    void Function(String)? log,
+  }) async {
     tester.view.physicalSize = const Size(836, 1800);
     tester.view.devicePixelRatio = 2.0;
     addTearDown(tester.view.reset);
@@ -933,7 +937,11 @@ void main() {
         home: Scaffold(
           body: Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-            child: UssdTab(client: client, connected: true, log: (_) {}),
+            child: UssdTab(
+              client: client,
+              connected: true,
+              log: log ?? (_) {},
+            ),
           ),
         ),
       ),
@@ -1175,6 +1183,41 @@ void main() {
     );
     expect(field.controller!.text, contains('+'));
     expect(field.controller!.text, contains('0'));
+  });
+
+  testWidgets('USSD multi-step shortcut runs as one confirmed action', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'ussd_saved': jsonEncode([
+        {'code': '*312#', 'label': 'My plan', 'steps': ['3', '1']},
+      ]),
+    });
+    final client = _FakeUssdClient();
+    final lines = <String>[];
+    await pumpUssd(tester, client, log: lines.add);
+
+    // Tapping a scripted chip must confirm before anything is dialled:
+    // a stale script (or a spending one) needs a human in the loop.
+    await tester.tap(find.text('My plan'));
+    await tester.pumpAndSettle();
+    expect(find.text('*312# → 3 → 1'), findsOneWidget);
+    expect(client.replyCalls, 0);
+
+    await tester.tap(find.byKey(const Key('ussd-shortcut-run')));
+    await tester.pumpAndSettle();
+
+    // Both scripted answers were sent, in order, and the run was reported
+    // honestly: the fake menu never closes, so it must NOT claim success.
+    expect(client.lastReply, '1');
+    // The fake menu never closes, so the run must say so instead of
+    // claiming the shortcut finished.
+    expect(
+      lines.any((l) => l.contains('still open after 2 step(s)')),
+      isTrue,
+      reason: lines.join(' | '),
+    );
+    expect(find.textContaining('9 8GB @N250'), findsWidgets);
   });
 
   // ── Persisted session log + stale-data honesty ─────────────────────
