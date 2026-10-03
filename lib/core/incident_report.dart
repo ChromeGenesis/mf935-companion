@@ -58,6 +58,7 @@ class IncidentInput {
   final List<Map<String, dynamic>> speedTests; // SpeedRecord JSON, newest first
   final List<Map<String, dynamic>> alerts; // SmartAlert JSON, newest first
   final List<Map<String, dynamic>> deviceEvents; // DeviceEvent JSON
+  final List<Map<String, dynamic>> timeline; // ConnEvent JSON, newest first
   final Map<String, String> unsupported;
   final List<String> logLines;
 
@@ -70,6 +71,7 @@ class IncidentInput {
     this.speedTests = const [],
     this.alerts = const [],
     this.deviceEvents = const [],
+    this.timeline = const [],
     this.unsupported = const {},
     this.logLines = const [],
   });
@@ -156,6 +158,17 @@ String buildIncidentText(IncidentInput input, {DateTime? now}) {
       '${e['name'] ?? '?'} ($mac)',
     );
   }
+  // The timeline is what turns "the link is bad now" into "it went down
+  // at 19:42, came back at 19:47, and the network fell back to 3G at
+  // 19:43" — the part carriers actually act on.
+  final timeline = input.timeline.take(20).toList();
+  buf.writeln('connection_timeline (${input.timeline.length}):');
+  for (final t in timeline) {
+    buf.writeln(
+      '  - ${t['at'] ?? '?'} [${t['sev'] ?? 'info'}] '
+      '${t['kind'] ?? '?'}: ${t['summary'] ?? ''}',
+    );
+  }
   if (input.unsupported.isEmpty) {
     buf.writeln('unsupported_commands: none recorded');
   } else {
@@ -191,6 +204,7 @@ Map<String, dynamic> buildIncidentJson(IncidentInput input, {DateTime? now}) {
     'traffic': scrubSnapshot(input.traffic),
     'recent_speed_tests': input.speedTests.take(10).toList(),
     'recent_alerts': input.alerts.take(10).toList(),
+    'connection_timeline': input.timeline.take(20).toList(),
     'device_episodes': [
       for (final e in input.deviceEvents.take(10))
         {...Map<String, dynamic>.from(e), 'mac': maskMac('${e['mac'] ?? ''}')},

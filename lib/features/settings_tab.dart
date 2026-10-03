@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/capability.dart';
+import '../core/conn_timeline.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -17,6 +18,7 @@ import 'advanced_card.dart';
 import 'dashboard_panels.dart';
 import 'device_intel_card.dart';
 import 'incident_card.dart';
+import 'timeline_card.dart';
 import 'monitor_modes_card.dart';
 import 'smart_alerts_card.dart';
 import 'status_devices.dart';
@@ -39,6 +41,10 @@ class SettingsTab extends StatefulWidget {
   // Diagnostics panel state (owned by the shell).
   final List<String> logLines;
   final VoidCallback onClearLog;
+
+  /// Connection timeline entries (newest first) and its clear action.
+  final List<ConnEvent> timelineEvents;
+  final VoidCallback onClearTimeline;
   final Future<void> Function() onExportDiagnostics;
   final VoidCallback onTestAlert;
   final Map<String, String> unsupported;
@@ -77,6 +83,8 @@ class SettingsTab extends StatefulWidget {
     required this.onPasswordSubmit,
     required this.logLines,
     required this.onClearLog,
+    required this.timelineEvents,
+    required this.onClearTimeline,
     required this.onExportDiagnostics,
     required this.onTestAlert,
     required this.balanceRawLog,
@@ -244,6 +252,10 @@ class _SettingsTabState extends State<SettingsTab> {
       onTest: widget.onTest,
       onPasswordSubmit: widget.onPasswordSubmit,
     );
+    final timeline = TimelineCard(
+      events: widget.timelineEvents,
+      onClear: widget.onClearTimeline,
+    );
     final log = DiagnosticsPanel(
       lines: widget.logLines,
       onClear: widget.onClearLog,
@@ -341,11 +353,13 @@ class _SettingsTabState extends State<SettingsTab> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: rawLog),
+                    Expanded(child: timeline),
                     const SizedBox(width: 10),
                     Expanded(child: SizedBox(height: 280, child: log)),
                   ],
                 ),
+                const SizedBox(height: 10),
+                SizedBox(width: double.infinity, child: rawLog),
               ],
             );
           }
@@ -368,6 +382,8 @@ class _SettingsTabState extends State<SettingsTab> {
               incident,
               const SizedBox(height: 10),
               advanced,
+              const SizedBox(height: 10),
+              timeline,
               const SizedBox(height: 10),
               rawLog,
               const SizedBox(height: 10),

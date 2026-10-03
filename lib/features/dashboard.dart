@@ -18,6 +18,7 @@ import '../core/poller.dart';
 import '../core/capability.dart';
 import '../core/advanced.dart';
 import '../core/device_store.dart';
+import '../core/conn_timeline.dart';
 import '../core/diagnostics.dart';
 import '../core/log_store.dart';
 import '../core/monitor_modes.dart';
@@ -32,6 +33,7 @@ import 'info_tab.dart';
 import 'settings_tab.dart';
 import 'signal_locator_widgets.dart';
 import '../core/notifications.dart';
+import '../core/reachability.dart';
 import 'sidebar.dart';
 import 'sms_tab.dart';
 import 'status_tab.dart';
@@ -72,6 +74,17 @@ class _DashboardPageState extends State<DashboardPage>
   /// Writes are batched; durability-critical lines flush immediately.
   final LogStore _logStore = LogStore();
   Timer? _logFlush;
+
+  /// Connection timeline: state changes, kept across restarts so
+  /// "why was it bad last night" has an answer. Fed from the same points
+  /// as the log, but structured enough to filter and to embed in a report.
+  final TimelineStore _timeline = TimelineStore();
+
+  /// Last network type seen, so a switch is recorded once, not per poll.
+  String _lastNetType = '';
+
+  /// Last internet verdict, so transitions are recorded, not repeats.
+  InternetVerdict? _lastVerdict;
   // Raw balance replies (MTN *323*4# / Airtel *323*1#): archived for
   // the Settings tab only — the primary screen surfaces parsed
   // results, never verbose modem text.
@@ -169,6 +182,7 @@ class _DashboardPageState extends State<DashboardPage>
     _housekeeping?.cancel();
     _logFlush?.cancel();
     unawaited(_logStore.flush());
+    unawaited(_timeline.flush());
     _localApi.stop();
     _balanceFeed.dispose();
     _signalFeed.dispose();
@@ -187,6 +201,7 @@ class _DashboardPageState extends State<DashboardPage>
     // lands under what came before it.
     var restored = <String>[];
     try {
+      await _timeline.load();
       restored = (await _logStore.load())
           .map(formatLogLine)
           .toList(growable: false);
@@ -262,6 +277,24 @@ class _DashboardPageState extends State<DashboardPage>
     });
   }
 
+  /// Record a timeline event and mirror it into the log, so the story is
+  /// readable in both places (structured for the timeline, plain for the
+  /// log) without two separate call sites.
+  void _mark(
+    ConnEventKind kind,
+    String summary, {
+    Map<String, String>? data,
+    EventSeverity? severity,
+  }) {
+    final e = _timeline.record(kind, summary, data: data, severity: severity);
+    _record(switch (e.severity) {
+      EventSeverity.critical => LogKind.sessionLost,
+      EventSeverity.warn => LogKind.alert,
+      EventSeverity.info => LogKind.recovered,
+    }, summary, stamp: true, durable: true);
+    unawaited(_timeline.flush());
+  }
+
   /// Batch the prefs write — a single incident logs several lines at
   /// once and each write is a disk hit. Durability-critical lines call
   /// [_flushLogNow] instead.
@@ -278,6 +311,14 @@ class _DashboardPageState extends State<DashboardPage>
     } catch (_) {
       // A log that cannot be written is a degraded nicety, never a crash.
     }
+  }
+
+  /// Settings → clear timeline: same contract as the log.
+  Future<void> _clearTimeline() async {
+    try {
+      await _timeline.clear();
+    } catch (_) {}
+    if (mounted) setState(() {});
   }
 
   /// Settings → clear log: RAM and storage together, so a cleared log
@@ -394,18 +435,17 @@ class _DashboardPageState extends State<DashboardPage>
                   : result.message)
             : '${result.message}${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
       });
-      _logLine(
+      // Login outcomes are the durable spine of both the log and the
+      // timeline: flushed at once, so a crash right after this still
+      // leaves the evidence behind.
+      _mark(
+        auto ? ConnEventKind.autoLogin : ConnEventKind.login,
         result.success
             ? '${auto ? 'AUTO-LOGIN' : 'LOGIN'} ok @ ${_client.gatewayIp}'
             : '${auto ? 'AUTO-LOGIN' : 'LOGIN'} FAILED: ${result.message}',
-      );
-      // Login outcomes are the durable spine of the log: flushed at once
-      // so a crash right after this still leaves the evidence behind.
-      _logStore.append(
-        auto ? LogKind.recovered : LogKind.login,
-        result.success
-            ? '${auto ? 'AUTO-LOGIN' : 'LOGIN'} ok @ ${_client.gatewayIp}'
-            : '${auto ? 'AUTO-LOGIN' : 'LOGIN'} FAILED: ${result.message}',
+        severity: result.success
+            ? EventSeverity.info
+            : (result.reachable ? EventSeverity.warn : EventSeverity.critical),
       );
       unawaited(_flushLogNow());
       if (result.raw.isNotEmpty && !result.success) {
@@ -560,6 +600,7 @@ class _DashboardPageState extends State<DashboardPage>
         }
         _smartTick(s);
         _watchSession(s);
+        _noteNetworkType('${s['network_type'] ?? ''}');
       },
       onUnreachable: _onPollerUnreachable,
       onDevices: _deviceTick,
@@ -573,8 +614,8 @@ class _DashboardPageState extends State<DashboardPage>
   /// itself when the link does.
   void _onPollerUnreachable() {
     _smartUnreachable();
-    _event(
-      LogKind.unreachable,
+    _mark(
+      ConnEventKind.unreachable,
       'router unreachable — watching for the link to return',
     );
     _armSessionRecovery(
@@ -588,16 +629,52 @@ class _DashboardPageState extends State<DashboardPage>
   /// and let the watchdog re-authenticate.
   void _watchSession(Map<String, dynamic> s) {
     if (!recovery.looksHollow(s)) return;
-    _event(
-      LogKind.sessionLost,
+    _mark(
+      ConnEventKind.sessionLost,
       'status poll came back empty — session lost (router rebooted?)',
-      durable: true,
     );
     unawaited(_flushLogNow());
     _poller?.stop();
     if (mounted) setState(() => _loginOk = false);
     _armSessionRecovery(
       reason: 'session gone — watching for the MiFi to come back',
+    );
+  }
+
+  /// Record a network-type switch (LTE → 3G and back) once per change.
+  /// A fallback is the single most common cause of "it got slow", so it
+  /// belongs in the timeline rather than only in a status field.
+  void _noteNetworkType(String type) {
+    if (type.isEmpty || type == _lastNetType) return;
+    final prev = _lastNetType;
+    _lastNetType = type;
+    if (prev.isEmpty) return; // first poll of a session is not a change
+    _mark(
+      ConnEventKind.networkTypeChanged,
+      'Network type changed $prev → $type',
+      data: {'from': prev, 'to': type},
+    );
+  }
+
+  /// Reachability probe result → timeline. Only transitions are recorded:
+  /// a permanently-dead internet should produce one entry, not one per
+  /// probe.
+  void _onProbeResult(ProbeResult r) {
+    final v = r.verdict;
+    final prev = _lastVerdict;
+    _lastVerdict = v;
+    if (prev == v) return;
+    final ok = v == InternetVerdict.ok;
+    _mark(
+      ok ? ConnEventKind.internetUp : ConnEventKind.internetDown,
+      ok
+          ? 'Internet reachable through the MiFi'
+          : 'Internet unusable behind the MiFi: ${r.info.headline}',
+      data: {
+        'dns': '${r.dnsOk}',
+        'https': '${r.httpsOk}',
+        if (r.httpsMs != null) 'ms': '${r.httpsMs}',
+      },
     );
   }
 
@@ -645,9 +722,9 @@ class _DashboardPageState extends State<DashboardPage>
       if (recovery.looksAuthenticated(probe)) {
         // The cookie survived: nothing to re-authenticate.
         setState(() => _loginOk = true);
-        _event(
-          LogKind.recovered,
-          'router back — session still valid, no login needed',
+        _mark(
+          ConnEventKind.recovered,
+          'router back — the saved session was still valid',
         );
         _stopSessionRecovery('router back — session still valid, no login needed');
         _startPoller();
@@ -663,7 +740,10 @@ class _DashboardPageState extends State<DashboardPage>
       );
       final ok = await _autoRelogin();
       if (ok) {
-        _event(LogKind.recovered, 'auto re-login ok — session restored');
+        _mark(
+          ConnEventKind.reconnect,
+          'auto re-login ok — session restored after the outage',
+        );
         _stopSessionRecovery('auto re-login ok — session restored');
         await _notifyNow(
           'MiFi reconnected',
@@ -788,7 +868,7 @@ class _DashboardPageState extends State<DashboardPage>
       final rb = await ScheduledReboot.load();
       if (rb.dueAt(now)) {
         await const ScheduledReboot().save();
-        _event(LogKind.reboot, 'scheduled reboot firing');
+        _mark(ConnEventKind.reboot, 'scheduled reboot firing');
         await _notifyNow('MiFi reboot', 'Scheduled reboot firing now.');
         try {
           await _client.reboot();
@@ -920,6 +1000,7 @@ class _DashboardPageState extends State<DashboardPage>
         signalFeed: _signalFeed,
         onOpenSignalLocator: _openSignalLocator,
         onBalanceRaw: _logBalanceRaw,
+        onProbeResult: _onProbeResult,
         onJumpTab: (i) => setState(() => _tab = i),
         onUnsupported: _markUnsupported,
         ),
@@ -954,6 +1035,8 @@ class _DashboardPageState extends State<DashboardPage>
       onTest: _testConnection,
       onPasswordSubmit: _doLogin,
       logLines: _log,
+      timelineEvents: _timeline.events,
+      onClearTimeline: _clearTimeline,
       onClearLog: _clearLog,
       onExportDiagnostics: _exportDiagnostics,
       onTestAlert: _testAlertNow,

@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/conn_timeline.dart';
 import '../core/device_store.dart';
 import '../core/incident_report.dart';
 import '../core/smart_alerts.dart';
@@ -56,6 +57,7 @@ class _IncidentCardState extends State<IncidentCard> {
         SpeedHistory.load(),
         SmartAlertStore.loadHistory(),
         DeviceStore.load(),
+        TimelineStore().load(),
       ).wait;
       final input = IncidentInput(
         appVersion: '1.0.0+1',
@@ -70,6 +72,7 @@ class _IncidentCardState extends State<IncidentCard> {
         deviceEvents: [
           for (final e in results.$6.events) e.toJson(),
         ],
+        timeline: [for (final e in results.$7) e.toJson()],
         unsupported: widget.unsupported,
         logLines: widget.logLines,
       );

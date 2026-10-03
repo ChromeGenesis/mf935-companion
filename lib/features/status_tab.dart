@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'status_cards.dart';
 import 'scout_card.dart';
+import 'internet_check_card.dart';
+import '../core/reachability.dart';
 import '../core/theme.dart';
 import 'speed_test_card.dart';
 import '../core/session_recovery.dart' as recovery;
@@ -42,6 +44,14 @@ class StatusTab extends StatefulWidget {
   /// reads this instead of polling on its own.
   final ValueNotifier<SignalSample?> signalFeed;
 
+  /// Reachability probe used by the data-path card. Injectable so tests
+  /// and previews never open a socket.
+  final InternetProbe? probe;
+
+  /// Fired with every completed reachability probe (the connection
+  /// timeline records it).
+  final void Function(ProbeResult result)? onProbeResult;
+
   /// Open the router signal-locator tool (modal on desktop, bottom
   /// sheet on mobile).
   final Future<void> Function()? onOpenSignalLocator;
@@ -69,6 +79,8 @@ class StatusTab extends StatefulWidget {
     required this.onRefreshNow,
     required this.balanceFeed,
     required this.signalFeed,
+    this.probe,
+    this.onProbeResult,
     this.onOpenSignalLocator,
     this.onBalanceRaw,
     this.onJumpTab,
@@ -316,6 +328,15 @@ class StatusTabState extends State<StatusTab> {
             onRefresh: _refreshBalance,
             balanceCode: ZteClient.balanceUssdForProvider(provider),
           ),
+        ),
+        const SizedBox(height: 10),
+        // Data path: "reachable" and "online" are different questions, and
+        // telling them apart is what people otherwise debug for hours.
+        InternetCheckCard(
+          connected: widget.connected,
+          probe: widget.probe ?? IoInternetProbe(),
+          log: widget.log,
+          onResult: widget.onProbeResult,
         ),
         const SizedBox(height: 10),
         // Connected devices: always fully expanded — the height cap and
