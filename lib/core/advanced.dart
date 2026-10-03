@@ -344,6 +344,30 @@ class LocalApiServer {
   }
 }
 
+// ── SMS auto-clean opt-out (inverted, buried opt-out) ───────────
+
+/// True when the always-on inbox auto-clean is opted OUT. Legacy
+/// `sms_autoclean` (old opt-in bool, default true) migrates once here;
+/// new storage is `sms_autoclean_off` so backups restore cleanly in
+/// either direction.
+Future<bool> loadSmsAutoCleanOff() async {
+  final prefs = await SharedPreferences.getInstance();
+  final v = prefs.getBool('sms_autoclean_off');
+  if (v != null) return v;
+  final legacy = prefs.getBool('sms_autoclean');
+  if (legacy != null) {
+    await prefs.setBool('sms_autoclean_off', !legacy);
+    return !legacy;
+  }
+  return false; // default: auto-clean ON
+}
+
+/// Persist the opt-out flag.
+Future<void> saveSmsAutoCleanOff(bool off) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool('sms_autoclean_off', off);
+}
+
 // ── Backup / restore (plaintext JSON) ────────────────────────────
 
 /// Prefs keys included in a backup. Everything the app remembers,
@@ -365,6 +389,10 @@ const backupKeys = <String>[
   'capability_discovery_v1',
   'local_api_v1',
   'sms_autoclean',
+  'ussd_saved',
+  'ussd_draft_v1',
+  'ussd_history_v1',
+  'sms_autoclean_off',
 ];
 
 /// Export included prefs as versioned JSON. Pure I/O, tested decode.

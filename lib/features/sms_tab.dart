@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/advanced.dart';
 import 'sms_group.dart';
 import 'sms_panels.dart';
 import '../core/capability.dart';
@@ -44,8 +44,10 @@ class _SmsTabState extends State<SmsTab> {
   bool _unreadOnly = false;
 
   // Auto-clean: when the active store hits 80%, the 50 oldest go so
-  // new arrivals are never blocked. Opt-out via the inbox chip.
-  bool _autoClean = true;
+  // new arrivals are never blocked. On by default with no inbox
+  // chrome; the opt-out lives in Settings → Advanced (deliberately
+  // forgettable — it's a switch nobody should need to find).
+  bool _autoCleanOff = false;
   bool _purging = false;
   String _lastPurgeKey = '';
 
@@ -59,7 +61,7 @@ class _SmsTabState extends State<SmsTab> {
   @override
   void initState() {
     super.initState();
-    _loadAutoClean();
+    _loadAutoCleanOff();
     if (widget.connected) _load();
   }
 
@@ -78,23 +80,14 @@ class _SmsTabState extends State<SmsTab> {
     super.dispose();
   }
 
-  Future<void> _loadAutoClean() async {
+  Future<void> _loadAutoCleanOff() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final off = await loadSmsAutoCleanOff();
       if (!mounted) return;
-      setState(() => _autoClean = prefs.getBool('sms_autoclean') ?? true);
+      setState(() => _autoCleanOff = off);
     } catch (_) {
       // Prefs unavailable — stay on the safe default (clean on).
     }
-  }
-
-  Future<void> _setAutoClean(bool v) async {
-    setState(() => _autoClean = v);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('sms_autoclean', v);
-    } catch (_) {}
-    widget.log(v ? 'auto-clean on: oldest 50 go at 80% full' : 'auto-clean off');
   }
 
   Future<void> _load() async {
@@ -131,7 +124,7 @@ class _SmsTabState extends State<SmsTab> {
   /// failed delete never loops). Runs after every load; a successful
   /// purge reloads so counts settle below the line.
   Future<void> _maybeAutoPurge() async {
-    if (!_autoClean || _purging || !widget.connected || _busy) return;
+    if (_autoCleanOff || _purging || !widget.connected || _busy) return;
     final (used, total) = smsStoreUsage(_capacity, _store);
     if (total <= 0 || used / total < 0.8) return;
     final key = '$_store|$used|$total';
@@ -453,8 +446,6 @@ class _SmsTabState extends State<SmsTab> {
       hasFilter: _search.isNotEmpty || _unreadOnly,
       unreadOnly: _unreadOnly,
       onUnreadOnlyChanged: (v) => setState(() => _unreadOnly = v),
-      autoClean: _autoClean,
-      onAutoCleanChanged: _setAutoClean,
       groups: groups,
       filteredCount: filtered.length,
       collapseLabel: anyOpen ? 'collapse all' : 'expand all',

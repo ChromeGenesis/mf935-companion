@@ -49,6 +49,7 @@ class _AdvancedCardState extends State<AdvancedCard> {
   ScheduledReboot _reboot = const ScheduledReboot();
   DiscoveryResult? _discovery;
   LocalApiSettings _api = const LocalApiSettings();
+  bool _autoCleanOff = false;
   bool _busy = false;
   bool _ready = false;
 
@@ -66,6 +67,7 @@ class _AdvancedCardState extends State<AdvancedCard> {
         ScheduledReboot.load(),
         DiscoveryResult.load(),
         LocalApiSettings.load(),
+        loadSmsAutoCleanOff(),
       ).wait;
       if (!mounted) return;
       setState(() {
@@ -75,6 +77,7 @@ class _AdvancedCardState extends State<AdvancedCard> {
         _reboot = results.$3;
         _discovery = results.$4;
         _api = results.$5;
+        _autoCleanOff = results.$6;
         _ready = true;
       });
     } catch (_) {
@@ -355,6 +358,45 @@ class _AdvancedCardState extends State<AdvancedCard> {
                   ),
                 ],
               ),
+            _sectionTitle(c, 'SMS inbox'),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Inbox auto-clean',
+                        style: TextStyle(
+                          color: c.textSecondary,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                      Text(
+                        _autoCleanOff
+                            ? 'Off — a full inbox blocks new messages.'
+                            : 'On — the 50 oldest messages go at 80% full.',
+                        style: TextStyle(color: c.textMuted, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: !_autoCleanOff,
+                  activeThumbColor: c.accentText,
+                  onChanged: (v) async {
+                    setState(() => _autoCleanOff = !v);
+                    await saveSmsAutoCleanOff(!v);
+                    widget.log(
+                      v
+                          ? 'auto-clean on: oldest 50 go at 80% full'
+                          : 'auto-clean off',
+                    );
+                  },
+                ),
+              ],
+            ),
             _sectionTitle(c, 'Capability discovery'),
             Row(
               children: [
