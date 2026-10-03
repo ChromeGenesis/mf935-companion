@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zte_mf935_app/core/models.dart';
 import 'package:zte_mf935_app/core/ussd_steps.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
 import 'package:zte_mf935_app/features/ussd_saved.dart';

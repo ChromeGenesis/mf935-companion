@@ -37,6 +37,11 @@ class SignalSample {
   /// alongside RSCP; the 3G counterpart to RSRQ/SINR.
   final int? ecio;
 
+  /// Camped radio technology ('LTE', 'HSPA', ...). Part of the sample
+  /// because a metric is meaningless without it: -90 dBm on LTE and
+  /// -90 dBm on 3G are not the same measurement.
+  final String networkType;
+
   const SignalSample({
     required this.at,
     this.rsrp,
@@ -45,6 +50,7 @@ class SignalSample {
     this.rssi,
     this.rscp,
     this.ecio,
+    this.networkType = '',
   });
 
   /// Fetch the current metrics from the modem. LTE fields are
@@ -101,6 +107,7 @@ SignalSample parseSignalSample(Map<String, dynamic> m, DateTime at) {
     rssi: first(['rssi']),
     rscp: first(['rscp']),
     ecio: first(['ecio'], min: -40),
+    networkType: '${m['network_type'] ?? ''}',
   );
 }
 

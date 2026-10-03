@@ -352,6 +352,8 @@ class StatusTabState extends State<StatusTab> {
         SpeedTestCard(
           connected: widget.connected,
           log: widget.log,
+          // Lets each run record the radio conditions at both ends.
+          client: widget.client,
         ),
         const SizedBox(height: 10),
         // Scout measures the radio from wherever the MiFi is put, so it

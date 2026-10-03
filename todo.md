@@ -39,38 +39,38 @@ The first major feature. It helps the user physically find a better location for
 
 ### Sampling engine
 
-- [ ] Add a `NetworkSample` model with timestamp, signal bars, RSSI, LTE RSRP, network type, download rate, upload rate, and reachability.
-- [ ] Add a foreground sampling session with a configurable interval, defaulting to 2 seconds.
-- [ ] Prevent overlapping requests when a sample is still in flight.
-- [ ] Stop sampling when the user leaves Scout mode.
-- [ ] Show sample count, elapsed time, and current collection status.
-- [ ] Keep the existing background poller separate from Scout sampling.
+- [x] Add a `ScoutSample` model with timestamp, signal bars, RSSI, LTE RSRP, network type, download rate, upload rate, and reachability.
+- [x] Add a foreground sampling session with a configurable interval, defaulting to 2 seconds.
+- [x] Prevent overlapping requests when a sample is still in flight.
+- [x] Stop sampling when the user leaves Scout mode.
+- [x] Show sample count, elapsed time, and current collection status.
+- [x] Keep the existing background poller separate from Scout sampling.
 
 ### Guided placement flow
 
-- [ ] Add a Scout screen with `Start`, `Pause`, `Mark Spot`, and `Finish` actions.
-- [ ] Let the user label a spot manually: `Desk`, `Window`, `Upstairs`, `Kitchen`, etc.
-- [ ] Show the current live score and the best score so far.
-- [ ] Require a short dwell period before accepting a spot result.
-- [ ] Warn when the modem is disconnected or samples are stale.
-- [ ] Show a clear result: `Best location: Upstairs window`.
+- [x] Add a Scout card with `Mark spot`, `Sample`/`Pause` and `End spot` actions.
+- [x] Let the user label a spot manually: `Desk`, `Window`, `Upstairs`, `Kitchen`, etc.
+- [x] Show the current live score and the best score so far.
+- [x] Require a short dwell period before accepting a spot result.
+- [x] Warn when the modem is disconnected or samples are stale.
+- [x] Show a clear result: `Best: Upstairs window (reason)`.
 
 ### Scoring
 
-- [ ] Score signal strength, stability, upload, download, and reachability separately.
-- [ ] Weight stability and upload strongly enough that a volatile high signal does not win unfairly.
-- [ ] Normalize missing metrics instead of treating missing data as zero.
-- [ ] Show why a spot won: `best upload`, `most stable`, or `best overall`.
-- [ ] Add a confidence label based on sample count and measurement duration.
+- [x] Score signal strength, stability, upload, download, and reachability separately.
+- [x] Weight stability and upload strongly enough that a volatile high signal does not win unfairly.
+- [x] Normalize missing metrics instead of treating missing data as zero.
+- [x] Show why a spot won: `best upload`, `most stable`, or `best overall`.
+- [x] Add a confidence label based on sample count and measurement duration.
 
 ### Results
 
-- [ ] Show a ranked list of marked spots.
-- [ ] Show min, max, average, and variation for each metric.
+- [x] Show a ranked list of marked spots.
+- [x] Show min, max, average, and variation for each metric.
 - [ ] Show a compact signal/throughput chart for each spot.
-- [ ] Allow a session to be renamed, deleted, or cleared.
-- [ ] Persist completed sessions locally.
-- [ ] Export a plain-text or JSON report.
+- [x] Allow a session to be renamed or cleared.
+- [x] Persist completed sessions locally (capped at 20).
+- [x] Export a plain-text or JSON report.
 
 **Done when:** a user can walk around with the MiFi, mark three locations, and receive a defensible recommendation in under five minutes.
 
@@ -82,8 +82,8 @@ The first major feature. It helps the user physically find a better location for
   - [ ] Strong but volatile
   - [ ] Weak cellular signal
   - [ ] Good signal but poor throughput
-  - [ ] Reachable modem with no usable internet
-  - [ ] Modem unreachable
+  - [x] Reachable modem with no usable internet (data-path probe)
+  - [x] Modem unreachable
 - [ ] Add a simple explanation beside every score.
 - [ ] Track signal loss and recovery episodes.
 - [ ] Track modem unreachable and recovery episodes.
@@ -95,13 +95,13 @@ The first major feature. It helps the user physically find a better location for
 
 ## Phase 3: Connection Timeline
 
-- [ ] Store important events locally with timestamps.
-- [ ] Record login, logout, reconnect, signal loss, signal recovery, SMS, reboot, shutdown, and network changes.
-- [ ] Record notable throughput drops and recoveries.
-- [ ] Add a timeline view with severity and category filters.
-- [ ] Make each event expandable to show raw supporting values.
-- [ ] Add retention limits so history cannot grow forever.
-- [ ] Add clear-history and export actions.
+- [x] Store important events locally with timestamps.
+- [x] Record login, reconnect, session loss, unreachable, internet up/down, reboot and network-type changes.
+- [ ] Record notable throughput drops and recoveries (signal loss/recovery still pending).
+- [x] Add a timeline view with severity and category filters.
+- [x] Make each event expandable to show raw supporting values.
+- [x] Add retention limits so history cannot grow forever (count + age).
+- [x] Add clear-history and export actions.
 
 **Done when:** a user can inspect why the connection was bad earlier without watching the dashboard live.
 
@@ -110,8 +110,8 @@ The first major feature. It helps the user physically find a better location for
 - [x] Add a small, cancellable speed-test service.
 - [x] Measure latency before throughput.
 - [x] Measure download and upload with explicit progress.
-- [ ] Record signal and network type at the start and end.
-- [ ] Store test results locally with a user label.
+- [x] Record signal and network type at the start and end.
+- [x] Store test results locally with a user label (rename after the run).
 - [x] Show “signal problem” versus “carrier congestion” as a cautious diagnosis.
 - [x] Avoid running tests automatically in the background.
 - [x] Add a data-use warning before the first test.
@@ -165,7 +165,7 @@ Example:
 
 These are valuable, but should wait until the core monitoring is trustworthy.
 
-- [ ] Room-by-room signal heatmap using manually marked spots.
+- [ ] Room-by-room signal heatmap using manually marked spots (Scout spots are stored and ranked today; the map view is still to do).
 - [x] Best time of day for downloads based on local history.
 - [x] Latency-focused gaming mode.
 - [x] Sustained-download streaming mode.

@@ -9,20 +9,27 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/dialogs.dart';
+import '../core/signal_locator.dart';
 import '../core/speed_history.dart';
 import '../core/speed_test.dart';
 import '../core/theme.dart';
 import '../core/ui_kit.dart';
-import '../core/zte_utils.dart';
+import '../core/zte_client.dart';
 
 class SpeedTestCard extends StatefulWidget {
   final bool connected;
   final void Function(String line) log;
 
+  /// Optional modem handle: when present, each run records radio
+  /// conditions at its start and end so the number can be compared
+  /// later. Absent (tests, previews) simply skips the capture.
+  final ZteClient? client;
+
   const SpeedTestCard({
     super.key,
     required this.connected,
     required this.log,
+    this.client,
   });
 
   @override
@@ -38,6 +45,9 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
   double? _liveBps;
   SpeedTestMode _mode = SpeedTestMode.full;
   SpeedTestResult? _last;
+
+  /// The stored record for [_last] (label + captured signal).
+  SpeedRecord? _lastRecord;
 
   @override
   void dispose() {
@@ -70,6 +80,9 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
     }
 
     final mode = _mode;
+    // Radio conditions before the run: without this, a throughput number
+    // cannot be compared with another one later.
+    final start = await _sampleSignal();
     widget.log('speed test starting (${SpeedTestRunner.modeLabel(mode)})…');
     final r = await _runner.run((phase, progress, liveBps) {
       if (!mounted) return;
@@ -90,9 +103,19 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
     } else if (r.error == 'cancelled') {
       widget.log('speed test cancelled');
     } else {
-      // Persist finished runs for incident reports + best-time-of-day.
+      // Persist finished runs for incident reports + best-time-of-day,
+      // with the radio state at both ends of the run.
+      final end = await _sampleSignal();
       final history = await SpeedHistory.load();
-      await history.added(SpeedRecord.fromResult(r)).save();
+      final record = SpeedRecord.fromResult(
+        r,
+        rsrpStart: start?.$1,
+        rsrpEnd: end?.$1,
+        netStart: start?.$2 ?? '',
+        netEnd: end?.$2 ?? '',
+      );
+      await history.added(record).save();
+      if (mounted) setState(() => _lastRecord = record);
       widget.log(
         'speed test [${r.server}]: '
         '${r.latencyMs?.toStringAsFixed(0)} ms · '
@@ -104,6 +127,65 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
 
   void _cancel() {
     _runner.cancel();
+  }
+
+  /// Best-effort (rsrp, network type) snapshot. Null when the modem
+  /// cannot be asked — a missing capture must never fail a speed test.
+  Future<(int?, String)?> _sampleSignal() async {
+    final client = widget.client;
+    if (client == null) return null;
+    try {
+      final sample = await SignalSample.fromClient(client);
+      return (sample.rsrp ?? sample.rssi, sample.networkType);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Name the run that just finished, so it can be compared with the
+  /// next one ("bedroom", "after the antenna move").
+  Future<void> _labelLast() async {
+    final record = _lastRecord;
+    if (record == null) return;
+    final ctrl = TextEditingController(text: record.label);
+    final label = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Name this test'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'e.g. bedroom window',
+            isDense: true,
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (label == null || !mounted) return;
+    final history = await SpeedHistory.load();
+    final renamed = SpeedHistory([
+      for (final r in history.records)
+        if (r.at == record.at) r.withLabel(label) else r,
+    ]);
+    await renamed.save();
+    setState(() => _lastRecord = renamed.records.firstWhere(
+      (r) => r.at == record.at,
+      orElse: () => record.withLabel(label),
+    ));
+    widget.log('speed test labelled "${label.isEmpty ? 'untitled' : label}"');
   }
 
   /// Cautious diagnosis (Phase 4): signal problem vs carrier congestion
@@ -303,6 +385,43 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
                   color: r.error == 'cancelled' ? c.textMuted : c.danger,
                   fontSize: 11.5,
                 ),
+              ),
+            ],
+            if (_lastRecord != null &&
+                (_lastRecord!.hasSignal || _lastRecord!.label.isNotEmpty)) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      [
+                        if (_lastRecord!.label.isNotEmpty)
+                          _lastRecord!.label,
+                        if (_lastRecord!.signalLine.isNotEmpty)
+                          _lastRecord!.signalLine,
+                      ].join(' · '),
+                      style: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    key: const Key('speed-test-label'),
+                    onTap: _labelLast,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        'name it',
+                        style: TextStyle(color: c.textMuted, fontSize: 11),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
             if (_hint() != null) ...[
