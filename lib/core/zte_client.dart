@@ -241,11 +241,12 @@ class ZteClient {
       }
       return LoginResult(false, 'Unexpected HTTP ${res.statusCode}.', raw);
     } on DioException catch (e) {
-      return LoginResult(
-        false,
-        _describeDioError(e),
-        e.response?.data?.toString() ?? '',
-      );
+      final raw = e.response?.data?.toString() ?? '';
+      // An HTTP response (even an error one) proves the router is up;
+      // a bare timeout/refusal means the link itself is still down.
+      return e.response == null
+          ? LoginResult.unreachable(_describeDioError(e), raw)
+          : LoginResult(false, _describeDioError(e), raw);
     } catch (e) {
       return LoginResult(false, 'Login error: $e', '');
     }
@@ -354,10 +355,12 @@ class ZteClient {
       cmds: const ['ussd_data_info'],
       multiData: false,
     );
-    return decodeUcs2Hex(
-      status['ussd_data']?.toString() ??
-          status['ussd_data_info']?.toString() ??
-          '',
+    return sanitizeUssdText(
+      decodeUcs2Hex(
+        status['ussd_data']?.toString() ??
+            status['ussd_data_info']?.toString() ??
+            '',
+      ),
     );
   }
 
@@ -417,7 +420,9 @@ class ZteClient {
             cmds: const ['ussd_data_info'],
             multiData: false,
           );
-          final text = decodeUcs2Hex('${m['ussd_data'] ?? ''}');
+          final text = sanitizeUssdText(
+            decodeUcs2Hex('${m['ussd_data'] ?? ''}'),
+          );
           return UssdResult(true, text, '${m['ussd_action'] ?? ''}', flag, '');
         } catch (e) {
           return UssdResult(false, '', '', flag, 'Reply fetch failed: $e');
@@ -434,6 +439,10 @@ class ZteClient {
 
   /// Human label for a terminal ussd_write_flag value (stock service.js).
   static String ussdFlagLabel(String flag) => zu.ussdFlagLabel(flag);
+
+  /// Normalize a raw USSD reply for display (lost/escaped line breaks,
+  /// control characters) — see [zu.sanitizeUssdText].
+  static String sanitizeUssdText(String raw) => zu.sanitizeUssdText(raw);
 
   /// Nested hash from the ZTE web UI (see [zu.generateAuthHash]).
   static String generateAuthHash(String password, String ld) =>

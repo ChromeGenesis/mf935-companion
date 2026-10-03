@@ -6,15 +6,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zte_mf935_app/main.dart';
 import 'package:zte_mf935_app/core/advanced.dart';
+import 'package:zte_mf935_app/features/ussd_saved.dart';
 import 'package:zte_mf935_app/core/device_store.dart';
 import 'package:zte_mf935_app/core/incident_report.dart';
 import 'package:zte_mf935_app/core/monitor_modes.dart';
 import 'package:zte_mf935_app/core/ndt7_client.dart';
+import 'package:zte_mf935_app/core/session_recovery.dart';
 import 'package:zte_mf935_app/core/signal_locator.dart';
 import 'package:zte_mf935_app/core/smart_alerts.dart';
 import 'package:zte_mf935_app/core/speed_history.dart';
 import 'package:zte_mf935_app/core/speed_test.dart';
+import 'package:zte_mf935_app/core/theme.dart';
 import 'package:zte_mf935_app/core/widgets.dart';
+import 'package:zte_mf935_app/features/ussd_tab.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
 
 void main() {
@@ -117,6 +121,89 @@ void main() {
     expect(ZteClient.isValidUssd('*#'), isFalse);
     expect(ZteClient.isValidUssd('312'), isFalse);
     expect(ZteClient.isValidUssd('*abc#'), isFalse);
+  });
+
+  test('USSD reply sanitizer repairs cable-eating line breaks', () {
+    // Live Airtel *312# plans menu: items 3-9 run together behind a
+    // ':' glued to the next item number (see bug screenshot).
+    const menu =
+        '1 My Airtel Offer\n2 Data Plans\n3 4GB @ N100:4 10GB @N300:5 '
+        '4GB @N150:6 3GB @N75:7 1GB @N50:8 2GB @ N60:9 8GB @N250:* Next';
+    final fixed = ZteClient.sanitizeUssdText(menu);
+    expect(fixed.split('\n').length, 10, reason: 'one line per menu item');
+    expect(fixed, contains('\n4 10GB @N300'));
+    expect(fixed, contains('\n9 8GB @N250'));
+    expect(fixed, endsWith('\n* Next'));
+
+    // Captured Airtel *323*1# balance reply: one break collapsed to the
+    // bullet, one mangled into a stray 'n'.
+    const balance =
+        'Your Balances Are:*Binge Bundle: 0.00MB till 15-09-2026 05:09:18,\n'
+        'Weekly Bundle: 29990.35MB till 28-09-2026 02:09:12,\n'
+        'YouTube Night:*n Next';
+    final cleaned = ZteClient.sanitizeUssdText(balance);
+    expect(cleaned, contains('Are:\n*Binge Bundle'));
+    expect(cleaned, contains('Night:\n* Next'));
+    // Real newline and clock colons survive untouched.
+    expect(cleaned, contains('05:09:18,\nWeekly Bundle'));
+
+    // Literal escape text becomes a break; stray controls are dropped.
+    expect(ZteClient.sanitizeUssdText('a\\nb\u0007c'), 'a\nbc');
+    // Clean replies pass through unchanged (no phantom line breaks).
+    expect(ZteClient.sanitizeUssdText('Balance: 2.3GB'), 'Balance: 2.3GB');
+    expect(ZteClient.sanitizeUssdText('Ready by 12:30 pm'),
+        'Ready by 12:30 pm');
+    expect(ZteClient.sanitizeUssdText(''), '');
+  });
+
+  test('USSD history roundtrip + cap (survives restarts)', () async {
+    SharedPreferences.setMockInitialValues({});
+    expect(await loadUssdHistory(), isEmpty);
+
+    final now = DateTime.now();
+    var h = <UssdHistoryEntry>[];
+    for (var i = 0; i < 35; i++) {
+      h = pushUssdHistory(
+        h,
+        UssdHistoryEntry(
+          request: '*312*$i#',
+          reply: 'reply $i',
+          ok: true,
+          at: now.add(Duration(minutes: i)),
+        ),
+      );
+    }
+    expect(h.length, 30, reason: 'history caps at 30');
+    await saveUssdHistory(h);
+    final loaded = await loadUssdHistory();
+    expect(loaded.length, 30);
+    expect(loaded.first.request, h.first.request);
+    expect(loaded.first.ok, isTrue);
+    // Timestamps round-trip at millisecond precision (JSON encoding).
+    expect(loaded.last.at.millisecondsSinceEpoch,
+        h.last.at.millisecondsSinceEpoch);
+  });
+
+  test('SMS auto-clean opt-out: defaults on, migrates legacy once', () async {
+    SharedPreferences.setMockInitialValues({});
+    expect(await loadSmsAutoCleanOff(), isFalse,
+        reason: 'auto-clean is always on by default');
+
+    // Legacy opt-in key flips once into the new inverted key.
+    SharedPreferences.setMockInitialValues({'sms_autoclean': false});
+    expect(await loadSmsAutoCleanOff(), isTrue);
+    expect(await loadSmsAutoCleanOff(), isTrue,
+        reason: 'migration persisted — stable across restarts');
+
+    SharedPreferences.setMockInitialValues({'sms_autoclean': true});
+    expect(await loadSmsAutoCleanOff(), isFalse);
+
+    // New key wins over any legacy value.
+    SharedPreferences.setMockInitialValues(
+        {'sms_autoclean': false, 'sms_autoclean_off': false});
+    expect(await loadSmsAutoCleanOff(), isFalse);
+    await saveSmsAutoCleanOff(true);
+    expect(await loadSmsAutoCleanOff(), isTrue);
   });
 
   test('Rate + online-time formatters', () {
@@ -800,4 +887,282 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('Session recovery policy: hollow polls + polite retry cadence', () {
+    // A logged-in poll carries firmware fields; a rebooted router answers
+    // with nothing (or a lone result code).
+    expect(
+      looksAuthenticated({'battery_vol_percent': '82', 'network_type': 'LTE'}),
+      isTrue,
+    );
+    expect(looksAuthenticated({'battery_vol_percent': '0'}), isTrue);
+    expect(looksAuthenticated({}), isFalse);
+    expect(looksAuthenticated({'result': '1'}), isFalse);
+    expect(looksHollow({'network_type': ''}), isTrue);
+
+    // Only *unreachable* failures keep the watchdog alive: retrying a
+    // wrong password would burn the firmware's attempt budget.
+    expect(const LoginResult.unreachable('connect timeout').reachable, isFalse);
+    expect(shouldKeepWatching(const LoginResult.unreachable('timeout')), isTrue);
+    expect(
+      shouldKeepWatching(const LoginResult(false, 'Wrong password (result=3).')),
+      isFalse,
+    );
+    expect(shouldKeepWatching(const LoginResult(true, 'ok')), isFalse);
+    expect(const LoginResult(true, 'ok').reachable, isTrue);
+
+    // First minutes retry fast (a rebooting MF935 is back quickly), then
+    // settle so an off router is not hammered.
+    expect(recoveryProbeDelay(1), const Duration(seconds: 5));
+    expect(recoveryProbeDelay(6), const Duration(seconds: 5));
+    expect(recoveryProbeDelay(7), const Duration(seconds: 15));
+    expect(recoveryProbeDelay(99), const Duration(seconds: 15));
+  });
+
+  // ── USSD console: layout + menu-mode interactions ──────────────────
+
+  Future<void> pumpUssd(WidgetTester tester, ZteClient client) async {
+    tester.view.physicalSize = const Size(836, 1800);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildZteTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+            child: UssdTab(client: client, connected: true, log: (_) {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('USSD keypad hugs its action row (no dead space)', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpUssd(tester, ZteClient());
+
+    final grid = tester.getRect(find.byKey(const Key('ussd-keypad')));
+    final actions = tester.getRect(find.byKey(const Key('ussd-action-row')));
+    // The action row is welded to the last key row (2dp spacer).
+    expect(actions.top - grid.bottom, lessThan(8));
+    // Four 58dp rows + the action row: the whole pad stays compact.
+    expect(actions.bottom - grid.top, lessThan(320));
+    // `* 0 #` sits in that last row, above the actions.
+    final star = tester.getRect(find.text('*'));
+    expect(star.bottom, lessThanOrEqualTo(actions.top + 1));
+  });
+
+  testWidgets('USSD entry field is glass, not the Material black fill', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpUssd(tester, ZteClient());
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('ussd-code-field')),
+    );
+    // The app theme fills inputs opaque black; the dialer display opts
+    // out and leans on its own translucent glass tile instead.
+    expect(field.decoration?.filled, isFalse);
+    expect(field.decoration?.hintText, contains('*312#'));
+  });
+
+  testWidgets('USSD keypad survives large system text scales', (tester) async {
+    // Fixed key rows must track the system text size, otherwise every
+    // key overflows its tile (10px per key at 1.6x before the fix).
+    for (final scale in [1.3, 1.6, 2.0]) {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(720, 1280);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildZteTheme(brightness: Brightness.dark),
+          builder: (ctx, child) => MediaQuery(
+            data: MediaQuery.of(
+              ctx,
+            ).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: UssdTab(client: ZteClient(), connected: true, log: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // The keypad is clamped at 1.5x: it grows, but never past a size
+      // that stops fitting the phone.
+      final grid = tester.getRect(find.byKey(const Key('ussd-keypad')));
+      expect(grid.height, lessThanOrEqualTo(58 * 1.5 * 4 + 1));
+      expect(find.byKey(const Key('ussd-action-row')), findsOneWidget);
+    }
+  });
+
+  testWidgets('USSD console survives a small phone and a desktop window', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final client = _FakeUssdClient();
+    // Small phone: menu mode must still fit without overflows (the test
+    // framework fails on RenderFlex overflow exceptions).
+    tester.view.physicalSize = const Size(720, 1280);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildZteTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: UssdTab(client: client, connected: true, log: (_) {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('ussd-code-field')), '*312#');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.call));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ussd-code-field')), findsNothing);
+    expect(find.byKey(const Key('ussd-reply-send')), findsOneWidget);
+
+    // Wide desktop window: two-column layout stays intact.
+    tester.view.physicalSize = const Size(2400, 1400);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ussd-keypad')), findsOneWidget);
+    expect(find.textContaining('HISTORY'), findsOneWidget);
+  });
+
+  testWidgets('USSD menu mode: field yields, * and # answer, inline send', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final client = _FakeUssdClient();
+    await pumpUssd(tester, client);
+
+    await tester.enterText(find.byKey(const Key('ussd-code-field')), '*312#');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.call));
+    await tester.pumpAndSettle();
+
+    // Interactive menu: the primary entry field yields to the session
+    // banner so multi-line menu text gets the height instead.
+    expect(find.byKey(const Key('ussd-code-field')), findsNothing);
+    expect(find.textContaining('MENU AWAITS REPLY'), findsOneWidget);
+    // (The same text also lands in the history card below the console.)
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('ussd-response-box')),
+        matching: find.textContaining('1 My Airtel Offer'),
+      ),
+      findsOneWidget,
+    );
+    final box = tester.getRect(find.byKey(const Key('ussd-response-box')));
+    expect(box.height, lessThanOrEqualTo(232.5));
+
+    // Navigation symbols are answer keys now, not dead keys.
+    await tester.tap(find.text('*'));
+    await tester.tap(find.text('#'));
+    await tester.pump();
+    expect(find.textContaining('Reply: *#'), findsOneWidget);
+
+    // Inline Send submits without scrolling to the dial circle.
+    await tester.tap(find.byKey(const Key('ussd-reply-send')));
+    await tester.pumpAndSettle();
+    expect(client.lastReply, '*#');
+    expect(client.replyCalls, 1);
+    // Second level arrived: still a menu, reply buffer cleared.
+    expect(find.textContaining('MENU AWAITS REPLY'), findsOneWidget);
+  });
+
+  testWidgets('USSD saved strip + history scroll in bounded containers', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'ussd_saved': jsonEncode([
+        for (var i = 0; i < 10; i++) {'code': '*93$i#', 'label': ''},
+      ]),
+      'ussd_history_v1': jsonEncode([
+        for (var i = 0; i < 14; i++)
+          {
+            'request': '*312*$i#',
+            'reply': 'reply $i line one\nline two',
+            'ok': true,
+            'at': 1700000000000,
+          },
+      ]),
+    });
+    await pumpUssd(tester, ZteClient());
+
+    // Chips: one fixed-height row that scrolls sideways instead of
+    // wrapping to a second row (the old container pushed the dialer down).
+    final strip = tester.getRect(find.byKey(const Key('ussd-saved-strip')));
+    expect(strip.height, lessThanOrEqualTo(34));
+    expect(find.text('*930#'), findsOneWidget);
+    final stripScroll = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ussd-saved-strip')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+    expect(stripScroll.maxScrollExtent, greaterThan(0));
+
+    // History: capped viewport that scrolls itself, page never grows.
+    final list = tester.getRect(find.byKey(const Key('ussd-history-list')));
+    expect(list.height, lessThanOrEqualTo(320));
+    final listScroll = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ussd-history-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+    expect(listScroll.maxScrollExtent, greaterThan(0));
+  });
+}
+
+/// USSD client double: no network, canned menu + reply answers.
+class _FakeUssdClient extends ZteClient {
+  int replyCalls = 0;
+  String? lastReply;
+  bool menuOpen = true;
+
+  @override
+  Future<void> cancelUssd() async {}
+
+  @override
+  Future<UssdResult> runUssd(
+    String code, {
+    Duration pollEvery = const Duration(seconds: 1),
+    int maxPolls = 45,
+  }) async => const UssdResult(
+    true,
+    '1 My Airtel Offer\n2 Data Plans\n3 4GB @ N100',
+    '1',
+    '16',
+    '',
+  );
+
+  @override
+  Future<bool> replyUssd(String text) async {
+    replyCalls++;
+    lastReply = text;
+    return true;
+  }
+
+  @override
+  Future<UssdResult> waitUssdReply({
+    Duration pollEvery = const Duration(seconds: 1),
+    int maxPolls = 45,
+  }) async => menuOpen
+      ? const UssdResult(true, '9 8GB @N250\n* Next', '1', '16', '')
+      : const UssdResult(true, 'Purchase successful.', '', '16', '');
 }

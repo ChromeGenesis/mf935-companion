@@ -353,6 +353,61 @@ String decodeUcs2Hex(String hex) {
   return out.startsWith('\uFEFF') ? out.substring(1) : out;
 }
 
+/// Normalize a raw USSD reply for display and parsing.
+///
+/// The firmware's `ussd_data` field mangles the network's line breaks in
+/// several different ways (all observed on live Nigerian carrier menus):
+///
+///  1. Real CR / CRLF / NEL / LS / PS separators arrive mixed together.
+///  2. Some breaks are double-escaped, so the *text* contains a literal
+///     `\n` / `\r\n` two-character sequence instead of a newline.
+///  3. Some breaks are simply **lost**: the reply runs on and the only
+///     trace is a `:` glued to the next menu marker (e.g. the real Airtel
+///     `*312#` plans menu renders as `... N100:4 10GB @N300:5 ...`).
+///  4. Occasionally the escape survives as a stray `n` ("*n Next").
+///
+/// Without this, menus read as one mangled paragraph and the corrupt
+/// separators render as literal glyphs. Clock-like `H:MM` and already
+/// spaced `Key: value` text is left alone.
+String sanitizeUssdText(String raw) {
+  if (raw.isEmpty) return '';
+  var s = raw;
+  // 2. Double-escaped breaks (literal backslash + n/r) -> newline.
+  s = s.replaceAll('\\r\\n', '\n').replaceAll('\\n', '\n').replaceAll('\\r', '\n');
+  // 1. Everything that renders as a break becomes one newline.
+  s = s
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .replaceAll('\u0085', '\n')
+      .replaceAll('\u2028', '\n')
+      .replaceAll('\u2029', '\n');
+  // 4. A stray 'n' straight after a menu marker or a colon is a broken
+  //    escape ("Night:*n Next", "Plans:n1 ...").
+  s = s.replaceAllMapped(
+    RegExp(r'(:|\*)\s*n(?=\s)'),
+    (m) => m.group(1) == '*' ? '*' : ':',
+  );
+  // 3. Lost breaks: a ':' glued to the next menu marker. The colon is
+  //    kept (it still belongs to the line above), so the repair turns
+  //    "N100:4 10GB" into "N100:\n4 10GB". Skipped for clock/date
+  //    shapes (05:09:18) and for spaced "Key: value" text.
+  s = s.replaceAllMapped(
+    RegExp(r'(?<!\s):(?=[0-9*])(?![0-9]{2}\D)'),
+    (_) => ':\n',
+  );
+  // 5. Strip the remaining control characters a modem can emit; they
+  //    render as tofu boxes otherwise.
+  s = s.replaceAll(
+    RegExp(r'[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]'),
+    '',
+  );
+  // 6. Tidy: collapse blank runs, trim trailing blanks per line.
+  s = s
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .replaceAll(RegExp(r'[ \t]+\n'), '\n');
+  return s.trim();
+}
+
 const _gsm7 = {
   '000A',
   '000C',

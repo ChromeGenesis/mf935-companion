@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/capability.dart';
 import '../core/theme.dart';
@@ -6,17 +7,25 @@ import 'ussd_saved.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
 
-class UssdEntry {
-  final String request;
-  final String reply;
-  final bool ok;
-  final DateTime at;
-  UssdEntry(this.request, this.reply, this.ok) : at = DateTime.now();
-}
-
 /// USSD tab: send console (keypad, saved shortcuts with full CRUD) on the
 /// left, session history on the right — both running to the bottom on
 /// wide screens, stacked + dialer-first on narrow ones.
+///
+/// Everything here survives restarts: the half-typed code (draft), the
+/// saved shortcuts and the reply history. History taps only *recall* a
+/// code into the field — sending stays an explicit, deliberate action.
+///
+/// Layout contract (every rule traces to a live-device bug report):
+///  - the entry field is a glass tile, never the theme's black Material
+///    fill, and it *yields* to the session banner while a menu awaits a
+///    reply so multi-line session text gets the vertical space;
+///  - the reply panel and the history list scroll inside their own
+///    bounded sub-containers, so a long menu never pushes the keypad
+///    out of the viewport;
+///  - quick-code chips live in one fixed-height strip at the bottom of
+///    the card (horizontal scroll, never wraps, never reflows the card);
+///  - the keypad uses fixed-height rows, so the action row sits right
+///    under `* 0 #` instead of drifting toward the card's bottom edge.
 class UssdTab extends StatefulWidget {
   final ZteClient client;
   final bool connected;
@@ -36,24 +45,70 @@ class UssdTab extends StatefulWidget {
 }
 
 class _UssdTabState extends State<UssdTab> {
-  final _codeCtrl = TextEditingController(text: '*312#');
+  /// Starts empty — no default code. Any half-typed draft is restored
+  /// (and saved) via [ussd_draft_v1], so a restart never throws away
+  /// what you were typing.
+  final _codeCtrl = TextEditingController();
   final _replyCtrl = TextEditingController();
-  final List<UssdEntry> _history = [];
+  final _codeFocus = FocusNode();
+  List<UssdHistoryEntry> _history = [];
   List<UssdSaved> _saved = [];
   UssdResult? _last;
   bool _busy = false;
+
+  /// When a menu awaits a reply the existing dialer keypad drives the
+  /// answer (stock-phone parity). The phone keyboard is opt-in via the
+  /// toggle that replaces the bookmark button while a menu is open —
+  /// and every new menu resets to keypad.
+  bool _replyViaKeyboard = false;
+
+  bool get _replyMode => _last?.needsReply == true;
 
   @override
   void initState() {
     super.initState();
     _loadSaved();
+    _loadHistory();
+    _restoreDraft();
+    // Persist the draft as it changes (also fires for keypad setState).
+    _codeCtrl.addListener(_persistDraft);
+    // The glass tile lights up while the field holds focus.
+    _codeFocus.addListener(_onFocusChanged);
   }
 
   @override
   void dispose() {
+    _codeCtrl.removeListener(_persistDraft);
+    _codeFocus.removeListener(_onFocusChanged);
+    _codeFocus.dispose();
     _codeCtrl.dispose();
     _replyCtrl.dispose();
     super.dispose();
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _restoreDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      final draft = prefs.getString('ussd_draft_v1') ?? '';
+      // Only when the user hasn't typed during the async gap.
+      if (_codeCtrl.text.isEmpty && draft.isNotEmpty) {
+        _codeCtrl.text = draft;
+      }
+    } catch (_) {
+      // Prefs unavailable — empty field is the correct default anyway.
+    }
+  }
+
+  Future<void> _persistDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('ussd_draft_v1', _codeCtrl.text);
+    } catch (_) {}
   }
 
   Future<void> _loadSaved() async {
@@ -62,31 +117,51 @@ class _UssdTabState extends State<UssdTab> {
     setState(() => _saved = list);
   }
 
-  Future<void> _persistSaved() => saveUssdSaved(_saved);
+  Future<void> _loadHistory() async {
+    final list = await loadUssdHistory();
+    if (!mounted) return;
+    setState(() => _history = list);
+  }
+
+  Future<void> _persistHistory() => saveUssdHistory(_history);
 
   /// Auto-remember a sent code (deduped against manual entries so an
   /// edit survives the next send).
   void _remember(String code) {
-    setState(() => _saved = rememberUssdCode(_saved, code));
-    _persistSaved();
+    final next = rememberUssdCode(_saved, code);
+    setState(() => _saved = next);
+    saveUssdSaved(next);
   }
 
   Future<void> _editSaved({UssdSaved? existing}) async {
-    final code = ZteClient.normalizeUssd(_codeCtrl.text);
+    // "+ Save" saves whatever is dialed right now (or empty); the
+    // long-press edit path passes the chip's own entry.
+    final drafted = ZteClient.normalizeUssd(_codeCtrl.text);
     final result = await showUssdSavedDialog(
       context,
-      existing:
-          existing ??
-          (code.isEmpty || code == '#' ? null : UssdSaved(code: code)),
+      existing: existing ??
+          (ZteClient.isValidUssd(drafted) ? UssdSaved(code: drafted) : null),
     );
     if (result == null || !mounted) return;
-    setState(() => _saved = upsertUssdCode(_saved, result));
-    await _persistSaved();
+    final next = upsertUssdCode(_saved, result);
+    setState(() => _saved = next);
+    await saveUssdSaved(next);
   }
 
-  Future<void> _deleteSaved(String code) async {
-    setState(() => _saved = _saved.where((s) => s.code != code).toList());
-    await _persistSaved();
+  Future<void> _removeSaved(String code) async {
+    final ok = await confirmAction(
+      context,
+      icon: Icons.delete_outline,
+      title: 'Remove $code?',
+      message: 'The shortcut goes away. It comes back if you dial it '
+          'again, so this is always safe to undo by re-dialing.',
+      confirmLabel: 'Remove',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    final next = _saved.where((s) => s.code != code).toList();
+    setState(() => _saved = next);
+    await saveUssdSaved(next);
     widget.log('saved USSD removed: $code');
   }
 
@@ -126,6 +201,23 @@ class _UssdTabState extends State<UssdTab> {
     setState(() => _codeCtrl.clear());
   }
 
+  /// Same idea as [_key]/[_backspace], but writing the menu reply.
+  /// Multi-level sessions need the navigation symbols too, so `*` and
+  /// `#` are first-class answer keys (never inert).
+  void _replyKey(String k) {
+    setState(() => _replyCtrl.text += k);
+  }
+
+  void _replyBackspace() {
+    final t = _replyCtrl.text;
+    if (t.isEmpty) return;
+    setState(() => _replyCtrl.text = t.substring(0, t.length - 1));
+  }
+
+  void _replyClearAll() {
+    setState(() => _replyCtrl.clear());
+  }
+
   Future<void> _send() async {
     final code = ZteClient.normalizeUssd(_codeCtrl.text);
     if (!ZteClient.isValidUssd(code)) {
@@ -149,11 +241,18 @@ class _UssdTabState extends State<UssdTab> {
       if (!mounted) return;
       setState(() {
         _last = r;
-        _history.insert(
-          0,
-          UssdEntry(code, r.success ? r.text : r.error, r.success),
+        _replyViaKeyboard = false; // every new menu starts on the keypad
+        _history = pushUssdHistory(
+          _history,
+          UssdHistoryEntry(
+            request: code,
+            reply: r.success ? r.text : r.error,
+            ok: r.success,
+            at: DateTime.now(),
+          ),
         );
       });
+      _persistHistory();
       widget.log(
         r.success
             ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply' : ''})'
@@ -167,7 +266,18 @@ class _UssdTabState extends State<UssdTab> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _history.insert(0, UssdEntry(code, '$e', false)));
+      setState(() {
+        _history = pushUssdHistory(
+          _history,
+          UssdHistoryEntry(
+            request: code,
+            reply: '$e',
+            ok: false,
+            at: DateTime.now(),
+          ),
+        );
+      });
+      _persistHistory();
       widget.log('USSD error: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -188,9 +298,18 @@ class _UssdTabState extends State<UssdTab> {
           next: 'Reply was not accepted. The menu may have expired — send the code again.',
         );
         if (mounted) {
-          setState(
-            () => _history.insert(0, UssdEntry('↳ $text', msg, false)),
-          );
+          setState(() {
+            _history = pushUssdHistory(
+              _history,
+              UssdHistoryEntry(
+                request: '↳ $text',
+                reply: msg,
+                ok: false,
+                at: DateTime.now(),
+              ),
+            );
+          });
+          _persistHistory();
         }
         widget.log('USSD reply not accepted (USSD_PROCESS result=not-accepted)');
         return;
@@ -199,12 +318,19 @@ class _UssdTabState extends State<UssdTab> {
       if (!mounted) return;
       setState(() {
         _last = r;
-        _history.insert(
-          0,
-          UssdEntry('↳ $text', r.success ? r.text : r.error, r.success),
+        _history = pushUssdHistory(
+          _history,
+          UssdHistoryEntry(
+            request: '↳ $text',
+            reply: r.success ? r.text : r.error,
+            ok: r.success,
+            at: DateTime.now(),
+          ),
         );
         _replyCtrl.clear();
+        _replyViaKeyboard = false; // next menu level: keypad again
       });
+      _persistHistory();
       widget.log(r.success ? 'USSD reply ok' : 'USSD reply failed: ${r.error}');
     } catch (e) {
       widget.log('USSD reply error: $e');
@@ -223,10 +349,338 @@ class _UssdTabState extends State<UssdTab> {
     if (mounted) setState(() => _last = null);
   }
 
-  /// Stock-dialer keypad (SSOT): borderless keys with a big digit +
-  /// ITU letter sublabel, then a three-slot action row — save shortcut,
-  /// gold call-style send circle, backspace (long-press clears all).
-  /// One build path for both placements.
+  Future<void> _clearHistory() async {
+    final ok = await confirmAction(
+      context,
+      icon: Icons.history,
+      title: 'Clear USSD history?',
+      message: '${_history.length} saved transaction${_history.length == 1 ? '' : 's'} '
+          'disappear from every device this app runs on. This cannot be undone.',
+      confirmLabel: 'Clear',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    setState(() => _history = []);
+    await _persistHistory();
+  }
+
+  // ── Entry field (glass tile, stock dialer typography) ──────────────
+
+  /// The primary entry field. Glass fill + faint border like every other
+  /// inner tile in the app — the theme's opaque black Material fill is
+  /// explicitly switched off ([filled] false) so the ambient background
+  /// reads through. Focus paints an amber rim instead of a black box.
+  Widget _dialerField(ZteColors c, bool invalidCode) {
+    final focused = _codeFocus.hasFocus;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      decoration: BoxDecoration(
+        color: c.chip,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: focused ? c.accent.withAlpha(150) : c.borderSubtle,
+          width: focused ? 1.2 : 0.8,
+        ),
+        boxShadow: focused
+            ? [
+                BoxShadow(
+                  color: c.accentGlow.withAlpha(36),
+                  blurRadius: 16,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          Icon(Icons.dialpad, size: 17, color: c.textMuted),
+          Expanded(
+            child: TextField(
+              key: const Key('ussd-code-field'),
+              controller: _codeCtrl,
+              focusNode: _codeFocus,
+              keyboardType: TextInputType.phone,
+              textAlign: TextAlign.center,
+              cursorColor: c.accent,
+              cursorWidth: 2.5,
+              style: TextStyle(
+                color: invalidCode ? c.danger : c.textPrimary,
+                fontSize: 29,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.5,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+              decoration: InputDecoration(
+                filled: false,
+                isDense: true,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                hintText: 'Dial a code — e.g. *312#',
+                hintStyle: TextStyle(
+                  color: c.textMuted.withAlpha(150),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _send(),
+            ),
+          ),
+          SizedBox(
+            width: 34,
+            child: _codeCtrl.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear code',
+                    splashRadius: 16,
+                    padding: EdgeInsets.zero,
+                    onPressed: _busy ? null : _clearAll,
+                    icon: Icon(
+                      Icons.cancel_outlined,
+                      size: 16,
+                      color: c.textMuted,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// While a menu awaits a reply the primary field is *replaced* (not
+  /// just disabled): the banner states which code owns the session so
+  /// the menu text gets the whole vertical budget.
+  Widget _sessionBanner(ZteColors c) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: c.accent.withAlpha(20),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.accent.withAlpha(80)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.phone_in_talk_outlined, size: 16, color: c.accentText),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'SESSION OPEN — MENU AWAITS REPLY',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c.accentText,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _codeCtrl.text.trim().isEmpty
+                      ? 'USSD session'
+                      : ZteClient.normalizeUssd(_codeCtrl.text),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _busy ? null : _cancel,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              minimumSize: const Size(0, 34),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('End', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Reply panel: response text + inline answer bar ─────────────────
+
+  /// Bounded, scrollable reply reader. Long menus (9 plans + Next on one
+  /// screen) scroll inside the panel instead of stretching the card, and
+  /// the cap grows while a reply is expected so nothing is clipped.
+  Widget _responseBox(ZteColors c) {
+    final r = _last;
+    final text = r == null ? null : (r.success ? r.text : r.error);
+    final ok = r?.success ?? true;
+    return Container(
+      key: const Key('ussd-response-box'),
+      width: double.infinity,
+      constraints: BoxConstraints(
+        minHeight: 50,
+        maxHeight: _replyMode ? 232 : 128,
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: c.chip,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: text != null && !ok
+              ? c.danger.withAlpha(110)
+              : c.borderSubtle,
+        ),
+      ),
+      child: text == null
+          // Plain text (not an Align): the empty panel stays at its
+          // minHeight instead of inflating to the maxHeight cap.
+          ? Text(
+              'No reply yet — send a code to begin a session.',
+              style: TextStyle(color: c.textMuted, fontSize: 12.5),
+            )
+          : SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: SelectableText(
+                text,
+                style: TextStyle(
+                  color: ok ? c.textPrimary : c.danger,
+                  fontSize: 13,
+                  height: 1.5,
+                ),
+              ),
+            ),
+    );
+  }
+
+  /// Compact send control used inside the answer bar: submits the reply
+  /// without scrolling down to the dial pad circle.
+  Widget _inlineSend(ZteColors c, {required bool enabled}) {
+    return Material(
+      color: enabled ? c.accent : c.chip,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        key: const Key('ussd-reply-send'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: enabled ? _reply : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.send_rounded,
+                size: 15,
+                color: enabled ? c.onAccent : c.textMuted,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Send',
+                style: TextStyle(
+                  color: enabled ? c.onAccent : c.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Answer bar: mirrors what the keypad has typed (or hosts the phone
+  /// keyboard when that path is toggled) and always carries an inline
+  /// Send — adjacent to the response, above the keypad.
+  Widget _replyBar(ZteColors c) {
+    final ready = _replyCtrl.text.trim().isNotEmpty && !_busy;
+    if (_replyViaKeyboard) {
+      return Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('ussd-reply-field'),
+              controller: _replyCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.phone,
+              style: TextStyle(color: c.textPrimary, fontSize: 14),
+              decoration: InputDecoration(
+                filled: false,
+                isDense: true,
+                labelText: 'Menu reply (e.g. 9)',
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _reply(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _inlineSend(c, enabled: ready),
+        ],
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+      decoration: BoxDecoration(
+        color: c.accent.withAlpha(20),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.accent.withAlpha(70)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.dialpad, size: 15, color: c.accentText),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _replyCtrl.text.isEmpty
+                  ? 'Answer with the keypad — digits, * and #'
+                  : 'Reply: ${_replyCtrl.text}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: _replyCtrl.text.isEmpty ? c.textMuted : c.textPrimary,
+                fontSize: 12.5,
+                fontWeight: _replyCtrl.text.isEmpty
+                    ? FontWeight.w500
+                    : FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          if (_replyCtrl.text.isNotEmpty)
+            IconButton(
+              tooltip: 'Clear reply',
+              splashRadius: 16,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+              onPressed: _busy ? null : _replyClearAll,
+              icon: Icon(Icons.close, size: 15, color: c.textMuted),
+            ),
+          const SizedBox(width: 4),
+          _inlineSend(c, enabled: ready),
+        ],
+      ),
+    );
+  }
+
+  // ── Keypad (one build path for both placements) ────────────────────
+
+  /// Stock-dialer keypad (SSOT): borderless keys with a big digit + ITU
+  /// letter sublabel, then a three-slot action row — save shortcut (or
+  /// keyboard toggle while a menu awaits), gold call-style send circle,
+  /// backspace (long-press clears all). Rows are fixed-height so the
+  /// action row stays welded to `* 0 #`. In reply mode the same keys
+  /// write the answer — including `*` and `#` for multi-level menus.
   static const _dialSubs = <String, String>{
     '1': '',
     '2': 'ABC',
@@ -242,16 +696,21 @@ class _UssdTabState extends State<UssdTab> {
     '#': '',
   };
 
-  Widget _dialKey(ZteColors c, String k) {
+  Widget _dialKey(
+    ZteColors c,
+    String k, {
+    VoidCallback? onTap,
+    double scale = 1,
+  }) {
     final sub = _dialSubs[k]!;
     return InkWell(
-      borderRadius: BorderRadius.circular(48),
+      borderRadius: BorderRadius.circular(40),
       splashColor: c.accent.withAlpha(40),
       highlightColor: c.accent.withAlpha(24),
-      onTap: () => _key(k),
+      onTap: onTap ?? () => _key(k),
       child: Container(
         alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 3),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -259,24 +718,24 @@ class _UssdTabState extends State<UssdTab> {
               k,
               style: TextStyle(
                 color: c.textPrimary,
-                fontSize: 30,
+                fontSize: 29,
                 fontWeight: FontWeight.w500,
-                height: 1.1,
+                height: 1.05,
               ),
             ),
             // Fixed slot keeps every row even whether or not the key
-            // carries a sublabel.
+            // carries a sublabel (scaled with the system text size).
             SizedBox(
-              height: 14,
+              height: 13 * scale,
               child: sub.isEmpty
                   ? null
                   : Text(
                       sub,
                       style: TextStyle(
                         color: c.textMuted,
-                        fontSize: 10,
+                        fontSize: 9.5,
                         fontWeight: FontWeight.w700,
-                        letterSpacing: 2.2,
+                        letterSpacing: 2.1,
                       ),
                     ),
             ),
@@ -286,35 +745,83 @@ class _UssdTabState extends State<UssdTab> {
     );
   }
 
+  /// Keypad rows are fixed-height (the tight spacing is the feature), so
+  /// the geometry has to follow the system text size instead of letting
+  /// the glyphs outgrow their tiles. The pad itself is clamped at 1.5×:
+  /// past that an oversized keypad stops fitting the phone it is meant
+  /// for, while every other label in the console still scales fully.
   Widget _keypad() {
     final c = context.zc;
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
+    final reply = _replyMode;
+    final replyEmpty = _replyCtrl.text.isEmpty;
+    final scale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.5);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        GridView.count(
-          crossAxisCount: 3,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 2,
-          crossAxisSpacing: 8,
-          childAspectRatio: 1.4,
-          children: [for (final k in keys) _dialKey(c, k)],
+        MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.5,
+          child: GridView.builder(
+            key: const Key('ussd-keypad'),
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            itemCount: keys.length,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              // Fixed rows: the old 1.4 aspect ratio sized tiles from the
+              // card width (~83dp tall on a 412dp phone), leaving dead
+              // air above and below every digit and pushing the action
+              // row away from `* 0 #` — the reported gap. Fixed 58dp
+              // rows + the sublabel slot track the text scale.
+              mainAxisExtent: 58 * scale,
+              mainAxisSpacing: 0,
+              crossAxisSpacing: 8,
+            ),
+            itemBuilder: (_, i) {
+              final k = keys[i];
+              // In reply mode every key — including the navigation
+              // symbols — writes the answer.
+              return reply
+                  ? _dialKey(c, k, onTap: () => _replyKey(k), scale: scale)
+                  : _dialKey(c, k, scale: scale);
+            },
+          ),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 2),
         Row(
+          key: const Key('ussd-action-row'),
           children: [
             Expanded(
               child: Center(
-                child: IconButton(
-                  tooltip: 'Save as shortcut',
-                  onPressed: _busy ? null : () => _editSaved(),
-                  icon: Icon(
-                    Icons.bookmark_add_outlined,
-                    size: 24,
-                    color: c.accentText,
-                  ),
-                ),
+                child: reply
+                    ? // Keyboard is opt-in; the keypad is the default.
+                    IconButton(
+                        tooltip: _replyViaKeyboard
+                            ? 'Answer with the keypad'
+                            : 'Answer with the phone keyboard',
+                        onPressed: _busy
+                            ? null
+                            : () => setState(
+                                () => _replyViaKeyboard = !_replyViaKeyboard,
+                              ),
+                        icon: Icon(
+                          _replyViaKeyboard
+                              ? Icons.dialpad_outlined
+                              : Icons.keyboard_alt_outlined,
+                          size: 24,
+                          color: c.accentText,
+                        ),
+                      )
+                    : IconButton(
+                        tooltip: 'Save as shortcut',
+                        onPressed: _busy ? null : () => _editSaved(),
+                        icon: Icon(
+                          Icons.bookmark_add_outlined,
+                          size: 24,
+                          color: c.accentText,
+                        ),
+                      ),
               ),
             ),
             Expanded(
@@ -325,9 +832,19 @@ class _UssdTabState extends State<UssdTab> {
                   elevation: 0,
                   child: InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: _busy ? null : _send,
+                    // The gold circle is mode-honest: it dials a code
+                    // normally and sends the reply when a menu awaits.
+                    onTap: _busy
+                        ? null
+                        : (reply && !_replyViaKeyboard
+                              ? (_replyCtrl.text.trim().isEmpty
+                                    ? null
+                                    : _reply)
+                              : _send),
                     child: Padding(
-                      padding: const EdgeInsets.all(20),
+                      // Compact circle: the action row must read as part
+                      // of the keypad, not as a bar pinned to the floor.
+                      padding: const EdgeInsets.all(17),
                       child: _busy
                           ? SizedBox(
                               width: 28,
@@ -340,7 +857,9 @@ class _UssdTabState extends State<UssdTab> {
                               ),
                             )
                           : Icon(
-                              Icons.call,
+                              reply && !_replyViaKeyboard
+                                  ? Icons.send
+                                  : Icons.call,
                               size: 28,
                               color: c.onAccent,
                             ),
@@ -352,9 +871,19 @@ class _UssdTabState extends State<UssdTab> {
             Expanded(
               child: Center(
                 child: IconButton(
-                  tooltip: 'Delete (long-press clears all)',
-                  onPressed: _codeCtrl.text.isEmpty ? null : _backspace,
-                  onLongPress: _codeCtrl.text.isEmpty ? null : _clearAll,
+                  tooltip: reply
+                      ? 'Delete reply (long-press clears it)'
+                      : 'Delete (long-press clears all)',
+                  onPressed: _busy
+                      ? null
+                      : (reply
+                            ? (replyEmpty ? null : _replyBackspace)
+                            : (_codeCtrl.text.isEmpty ? null : _backspace)),
+                  onLongPress: _busy
+                      ? null
+                      : (reply
+                            ? (replyEmpty ? null : _replyClearAll)
+                            : (_codeCtrl.text.isEmpty ? null : _clearAll)),
                   icon: Icon(
                     Icons.backspace_outlined,
                     size: 24,
@@ -369,11 +898,14 @@ class _UssdTabState extends State<UssdTab> {
     );
   }
 
-  Widget _sendCard(ZteColors c, bool narrow) {
+  Widget _sendCard(ZteColors c) {
+    // Inline signal, zero layout shift: an undialable code tints itself
+    // red — no error line ever appears or disappears under the layout.
     final code = _codeCtrl.text;
-    final codeValid =
-        code.trim().isEmpty ||
-        ZteClient.isValidUssd(ZteClient.normalizeUssd(code));
+    final invalidCode =
+        code.trim().isNotEmpty &&
+        !ZteClient.isValidUssd(ZteClient.normalizeUssd(code));
+    final reply = _replyMode;
     return GlassCard(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -381,86 +913,18 @@ class _UssdTabState extends State<UssdTab> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SectionLabel('Send USSD'),
-          // Dialer display (stock-phone parity): big, centered,
-          // borderless entry with an amber cursor. Validation rides
-          // underneath as the only chrome.
-          TextField(
-            controller: _codeCtrl,
-            keyboardType: TextInputType.phone,
-            textAlign: TextAlign.center,
-            cursorColor: c.accent,
-            cursorWidth: 2.5,
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 30,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.5,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-            decoration: InputDecoration(
-              hintText: '*312#',
-              hintStyle: TextStyle(
-                color: c.textMuted.withAlpha(140),
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-              ),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              errorText: codeValid ? null : 'Codes look like *123#',
-              errorStyle: const TextStyle(fontSize: 12),
-              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-            ),
-            onChanged: (_) => setState(() {}),
-            onSubmitted: (_) => _send(),
-          ),
+          // Entry slot: dialer field normally, session banner while a
+          // menu owns the session (the field would only eat height).
+          if (reply) _sessionBanner(c) else _dialerField(c, invalidCode),
           const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: c.chip,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: c.borderSubtle),
-            ),
-            child: _last == null
-                ? Text(
-                    'No reply yet — send a code to begin a session.',
-                    style: TextStyle(color: c.textMuted, fontSize: 12.5),
-                  )
-                : SelectableText(
-                    _last!.success ? _last!.text : _last!.error,
-                    style: TextStyle(
-                      color: _last!.success ? c.textPrimary : c.danger,
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  ),
-          ),
-          if (_last?.needsReply == true) ...[
+          // Session reader — bounded + scrollable so long menus never
+          // clip and never push the keypad out of view.
+          _responseBox(c),
+          if (reply) ...[
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _replyCtrl,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Menu reply (e.g. 9)',
-                      isDense: true,
-                    ),
-                    onSubmitted: (_) => _reply(),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _busy ? null : _reply,
-                  child: const Text('Reply'),
-                ),
-              ],
-            ),
+            _replyBar(c),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _keypad(),
           Center(
             child: TextButton(
@@ -468,19 +932,78 @@ class _UssdTabState extends State<UssdTab> {
               child: const Text('Cancel session', style: TextStyle(fontSize: 12)),
             ),
           ),
-          const SizedBox(height: 4),
-          SavedUssdSection(
-            saved: _saved,
-            busy: _busy,
-            onSendCode: (code) {
-              _codeCtrl.text = code;
-              _send();
-            },
-            onAdd: _editSaved,
-            onEdit: (s) => _editSaved(existing: s),
-            onDelete: _deleteSaved,
-          ),
+          // Quick codes live at the bottom of the card in a single-line,
+          // horizontally scrollable strip: it can never wrap to two rows
+          // and push the dialer around, and it's hidden while a menu is
+          // open (picking a code mid-session is out of context).
+          if (!reply) ...[
+            Divider(color: c.borderSubtle, height: 1),
+            const SizedBox(height: 8),
+            SavedUssdSection(
+              saved: _saved,
+              busy: _busy,
+              onPickCode: (code) {
+                setState(() => _codeCtrl.text = code);
+              },
+              onAdd: () => _editSaved(),
+              onEdit: (s) => _editSaved(existing: s),
+              onRemoveConfirm: _removeSaved,
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  // ── History (bounded sub-container, never grows the page) ──────────
+
+  Widget _historyTile(ZteColors c, UssdHistoryEntry h) {
+    // Re-sanitized on render: entries stored before the USSD reply
+    // sanitizer existed must not keep their mangled separators forever.
+    final flat = ZteClient.sanitizeUssdText(h.reply).replaceAll(
+      RegExp(r'\s*\n\s*'),
+      ' · ',
+    );
+    return InkWell(
+      // Recall, never auto-send: tapping puts the code back in the field
+      // so you can read it before dialing.
+      onTap: h.ok && h.request.startsWith('*')
+          ? () => setState(() => _codeCtrl.text = h.request)
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  h.ok ? Icons.check_circle_outline : Icons.error_outline,
+                  size: 14,
+                  color: h.ok ? c.live : c.danger,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${h.request} · ${ZteClient.timeAgo(h.at)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              flat,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: c.textPrimary, fontSize: 12.5),
+            ),
+            const SizedBox(height: 6),
+            Divider(color: c.borderSubtle, height: 1),
+          ],
+        ),
       ),
     );
   }
@@ -497,10 +1020,15 @@ class _UssdTabState extends State<UssdTab> {
               const SectionLabel('History'),
               const Spacer(),
               InkWell(
-                onTap: () => setState(() => _history.clear()),
+                onTap: _history.isEmpty ? null : _clearHistory,
                 child: Text(
                   'clear',
-                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                  style: TextStyle(
+                    color: _history.isEmpty
+                        ? c.textMuted.withAlpha(90)
+                        : c.textMuted,
+                    fontSize: 11.5,
+                  ),
                 ),
               ),
             ],
@@ -510,67 +1038,28 @@ class _UssdTabState extends State<UssdTab> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Center(
                 child: Text(
-                  'No USSD yet this session.',
+                  'Replies land here — kept across restarts.',
                   style: TextStyle(color: c.textMuted),
                 ),
               ),
             )
           else
-            ..._history
-                .take(50)
-                .map(
-                  (h) => InkWell(
-                    onTap: h.ok && h.request.startsWith('*')
-                        ? () {
-                            _codeCtrl.text = h.request;
-                            _send();
-                          }
-                        : null,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                h.ok
-                                    ? Icons.check_circle_outline
-                                    : Icons.error_outline,
-                                size: 14,
-                                color: h.ok ? c.live : c.danger,
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  '${h.request} · ${ZteClient.timeAgo(h.at)}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: c.textMuted,
-                                    fontSize: 10.5,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            h.reply.replaceAll('\n', ' '),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: c.textPrimary,
-                              fontSize: 12.5,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Divider(color: c.borderSubtle, height: 1),
-                        ],
-                      ),
-                    ),
-                  ),
+            // Dedicated scroll viewport (capped on both axes) so the list
+            // scrolls itself instead of stretching the page.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: Scrollbar(
+                child: ListView.builder(
+                  key: const Key('ussd-history-list'),
+                  shrinkWrap: true,
+                  primary: false,
+                  padding: EdgeInsets.zero,
+                  physics: const ClampingScrollPhysics(),
+                  itemCount: _history.length,
+                  itemBuilder: (ctx, i) => _historyTile(c, _history[i]),
                 ),
+              ),
+            ),
         ],
       ),
     );
@@ -597,7 +1086,7 @@ class _UssdTabState extends State<UssdTab> {
                 flex: 7,
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
-                  child: _sendCard(c, false),
+                  child: _sendCard(c),
                 ),
               ),
               const SizedBox(width: 10),
@@ -616,7 +1105,7 @@ class _UssdTabState extends State<UssdTab> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Column(
             children: [
-              _sendCard(c, true),
+              _sendCard(c),
               const SizedBox(height: 10),
               _historyCard(c),
             ],

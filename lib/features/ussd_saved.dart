@@ -1,8 +1,9 @@
 library;
 
-/// Saved USSD shortcuts domain (SSOT): model, persistence, CRUD dialog
-/// and the saved-codes section. Stateless apart from the dialog form —
-/// [UssdTab] owns the send flow; this module owns everything "saved".
+/// Saved USSD shortcuts domain (SSOT): model, persistence, CRUD dialog,
+/// the saved-codes chip row and the persisted session history.
+/// Stateless apart from the dialog form — [UssdTab] owns the send flow;
+/// this module owns everything "saved".
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -13,7 +14,7 @@ import '../core/theme.dart';
 import '../core/zte_client.dart';
 
 /// A saved USSD shortcut. Codes auto-save on send; the UI also allows
-/// manual add / edit / delete (full CRUD).
+/// manual add / edit (long-press a chip) / delete (chip ✕, confirmed).
 class UssdSaved {
   final String code;
   final String label;
@@ -29,7 +30,9 @@ class UssdSaved {
 }
 
 const _savedKey = 'ussd_saved';
+const _historyKey = 'ussd_history_v1';
 const _maxSaved = 12;
+const _maxHistory = 30;
 
 /// Load persisted shortcuts (empty when none/corrupt).
 Future<List<UssdSaved>> loadUssdSaved() async {
@@ -74,153 +77,219 @@ List<UssdSaved> upsertUssdCode(List<UssdSaved> saved, UssdSaved result) {
   ].take(_maxSaved).toList();
 }
 
-/// Saved shortcuts list: tap to send, pencil to edit, trash to delete.
-/// "+ Save" opens the CRUD dialog.
+// ── Session history (persisted) ─────────────────────────────────────
+
+/// One USSD transaction worth remembering: the dialed code (or "↳ n"
+/// for menu replies), the decoded reply/error, ok flag and timestamp.
+/// Survives restarts — balance answers never die with the app.
+class UssdHistoryEntry {
+  final String request;
+  final String reply;
+  final bool ok;
+  final DateTime at;
+
+  const UssdHistoryEntry({
+    required this.request,
+    required this.reply,
+    required this.ok,
+    required this.at,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'request': request,
+    'reply': reply,
+    'ok': ok,
+    'at': at.millisecondsSinceEpoch,
+  };
+
+  factory UssdHistoryEntry.fromJson(Map<String, dynamic> j) =>
+      UssdHistoryEntry(
+        request: '${j['request'] ?? ''}',
+        reply: '${j['reply'] ?? ''}',
+        ok: j['ok'] == true,
+        at: DateTime.fromMillisecondsSinceEpoch(
+          (j['at'] as num?)?.toInt() ?? 0,
+        ),
+      );
+}
+
+/// Load persisted history (newest first; empty on none/corrupt).
+Future<List<UssdHistoryEntry>> loadUssdHistory() async {
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(_historyKey);
+  if (raw == null) return [];
+  try {
+    return (jsonDecode(raw) as List)
+        .whereType<Map>()
+        .map((e) => UssdHistoryEntry.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  } catch (_) {
+    return [];
+  }
+}
+
+/// Persist history (capped, newest first).
+Future<void> saveUssdHistory(List<UssdHistoryEntry> history) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(
+    _historyKey,
+    jsonEncode(history.take(_maxHistory).map((e) => e.toJson()).toList()),
+  );
+}
+
+/// Prepend a new entry, capped.
+List<UssdHistoryEntry> pushUssdHistory(
+  List<UssdHistoryEntry> history,
+  UssdHistoryEntry entry,
+) => [entry, ...history].take(_maxHistory).toList();
+
+/// Saved shortcuts as a bottom strip: a fixed-height, horizontally
+/// scrollable line of chips. Tap a chip → fills the field (never
+/// auto-sends); long-press → edit; the tiny ✕ removes (with a confirm).
+///
+/// The strip never wraps to a second row, so adding shortcuts can't push
+/// the dialer, reply panel or keypad around — the old wrapping container
+/// did exactly that (live-device bug report).
 class SavedUssdSection extends StatelessWidget {
   final List<UssdSaved> saved;
   final bool busy;
-  final ValueChanged<String> onSendCode;
+  final ValueChanged<String> onPickCode;
   final VoidCallback onAdd;
   final ValueChanged<UssdSaved> onEdit;
-  final ValueChanged<String> onDelete;
+  final Future<void> Function(String code) onRemoveConfirm;
 
   const SavedUssdSection({
     super.key,
     required this.saved,
     required this.busy,
-    required this.onSendCode,
+    required this.onPickCode,
     required this.onAdd,
     required this.onEdit,
+    required this.onRemoveConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return SizedBox(
+      // One line of chips, ever. Chips scroll sideways instead.
+      height: 34,
+      child: Row(
+        children: [
+          Icon(Icons.bookmark_border, size: 14, color: c.textMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: saved.isEmpty
+                ? Text(
+                    'Sent codes are remembered here',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                  )
+                : ListView.separated(
+                    key: const Key('ussd-saved-strip'),
+                    scrollDirection: Axis.horizontal,
+                    padding: EdgeInsets.zero,
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: saved.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 6),
+                    itemBuilder: (_, i) {
+                      final s = saved[i];
+                      return Center(
+                        child: _SavedChip(
+                          saved: s,
+                          busy: busy,
+                          onTap: () => onPickCode(s.code),
+                          onLongPress: () => onEdit(s),
+                          onDelete: () => onRemoveConfirm(s.code),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: busy ? null : onAdd,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.add, size: 16, color: c.accentText),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SavedChip extends StatelessWidget {
+  final UssdSaved saved;
+  final bool busy;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onDelete;
+
+  const _SavedChip({
+    required this.saved,
+    required this.busy,
+    required this.onTap,
+    required this.onLongPress,
     required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
     final c = context.zc;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
+    final hasLabel = saved.label.trim().isNotEmpty;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: busy ? null : onTap,
+      onLongPress: busy ? null : onLongPress,
+      child: Container(
+        padding: const EdgeInsets.only(left: 10, right: 3, top: 3, bottom: 3),
+        decoration: BoxDecoration(
+          color: c.accent.withAlpha(26),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: c.accent.withAlpha(70)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'SAVED CODES',
+              hasLabel ? saved.label.trim() : saved.code,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: c.textMuted,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.6,
+                color: c.textPrimary,
+                fontSize: 11.5,
+                fontWeight: hasLabel ? FontWeight.w700 : FontWeight.w500,
+                fontFeatures: hasLabel
+                    ? null
+                    : const [FontFeature.tabularFigures()],
               ),
             ),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: busy ? null : onAdd,
-              icon: Icon(Icons.add, size: 15, color: c.accentText),
-              label: Text(
-                'Save',
-                style: TextStyle(color: c.accentText, fontSize: 12),
+            if (hasLabel) ...[
+              const SizedBox(width: 4),
+              Text(
+                saved.code,
+                style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 10.5,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+            InkWell(
+              onTap: busy ? null : onDelete,
+              borderRadius: BorderRadius.circular(999),
+              child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: Icon(Icons.close, size: 12, color: c.textMuted),
               ),
             ),
           ],
         ),
-        if (saved.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text(
-              'Sent codes auto-save here. Tap + to add one manually.',
-              style: TextStyle(color: c.textMuted, fontSize: 12),
-            ),
-          )
-        else
-          for (final s in saved)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: c.chip,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: c.borderSubtle),
-                ),
-                child: Row(
-                  children: [
-                    InkWell(
-                      onTap: busy ? null : () => onSendCode(s.code),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Padding(
-                        padding: const EdgeInsets.all(2),
-                        child: Icon(
-                          Icons.north_west,
-                          size: 14,
-                          color: c.accentText,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: InkWell(
-                        onTap: busy ? null : () => onSendCode(s.code),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (s.label.trim().isNotEmpty)
-                              Text(
-                                s.label.trim(),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: c.textPrimary,
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            Text(
-                              s.code,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: s.label.trim().isNotEmpty
-                                    ? c.textMuted
-                                    : c.textPrimary,
-                                fontSize: 12,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Edit ${s.displayName}',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: busy ? null : () => onEdit(s),
-                      icon: Icon(
-                        Icons.edit_outlined,
-                        color: c.textMuted,
-                        size: 16,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Delete ${s.displayName}',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => onDelete(s.code),
-                      icon: Icon(
-                        Icons.delete_outline,
-                        color: c.danger,
-                        size: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-      ],
+      ),
     );
   }
 }
@@ -291,10 +360,10 @@ class _UssdFormState extends State<_UssdForm> {
 
   @override
   Widget build(BuildContext context) {
-    final code = _codeCtrl.text;
-    final valid =
-        code.trim().isEmpty ||
-        ZteClient.isValidUssd(ZteClient.normalizeUssd(code));
+    // No error chrome: Save stays disabled until the code is dialable.
+    final valid = ZteClient.isValidUssd(ZteClient.normalizeUssd(
+      _codeCtrl.text,
+    ));
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -303,11 +372,9 @@ class _UssdFormState extends State<_UssdForm> {
           controller: _codeCtrl,
           focusNode: _codeFocus,
           keyboardType: TextInputType.phone,
-          decoration: InputDecoration(
+          decoration: const InputDecoration(
             labelText: 'USSD code',
-            hintText: '*312#',
             isDense: true,
-            errorText: valid ? null : 'Codes look like *123#',
           ),
           onChanged: (_) => setState(() {}),
           onSubmitted: (_) => _submit(),
@@ -332,7 +399,7 @@ class _UssdFormState extends State<_UssdForm> {
             ),
             const SizedBox(width: 8),
             ElevatedButton(
-              onPressed: valid && code.trim().isNotEmpty ? _submit : null,
+              onPressed: valid ? _submit : null,
               child: Text(widget.existing == null ? 'Save' : 'Update'),
             ),
           ],

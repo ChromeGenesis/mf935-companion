@@ -14,10 +14,28 @@ class LoginResult {
   final String message;
   final String raw;
 
-  const LoginResult(this.success, this.message, [this.raw = '']);
+  /// False when the router never answered (timeout / connection refused)
+  /// rather than refusing the credentials. The dashboard's re-login
+  /// watchdog only retries unreachable routers — retrying a wrong
+  /// password just burns the firmware's attempt budget.
+  final bool reachable;
+
+  const LoginResult(
+    this.success,
+    this.message, [
+    this.raw = '',
+    this.reachable = true,
+  ]);
+
+  /// The router never answered at all: timeout, refused connection or a
+  /// WiFi link that is not up yet.
+  const LoginResult.unreachable(this.message, [this.raw = ''])
+    : success = false,
+      reachable = false;
 
   @override
-  String toString() => 'LoginResult($success, $message, $raw)';
+  String toString() =>
+      'LoginResult($success, $message, $raw${reachable ? '' : ', unreachable'})';
 }
 
 /// Outcome of a USSD transaction: [text] is the decoded reply, [action]

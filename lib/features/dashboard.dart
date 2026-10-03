@@ -21,6 +21,7 @@ import '../core/device_store.dart';
 import '../core/diagnostics.dart';
 import '../core/monitor_modes.dart';
 import '../core/platform.dart';
+import '../core/session_recovery.dart' as recovery;
 import '../core/speed_history.dart';
 import '../core/speed_test.dart';
 import '../core/signal_locator.dart';
@@ -46,7 +47,7 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage>
-    with WindowListener, TrayListener {
+    with WindowListener, TrayListener, WidgetsBindingObserver {
   late final ZteClient _client;
   ZtePoller? _poller;
   // Initialized once in main(); this handle only routes show() calls.
@@ -76,6 +77,15 @@ class _DashboardPageState extends State<DashboardPage>
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
+
+  /// Background re-login watchdog (reboot recovery — see
+  /// [recovery.looksAuthenticated] / [recovery.recoveryProbeDelay]):
+  /// armed when the router stops answering or answers without a session,
+  /// disarmed the moment it is ours again.
+  bool _recoveryArmed = false;
+  Timer? _recoveryTimer;
+  bool _recovering = false;
+  int _recoveryProbes = 0;
 
   /// Phase 9 loopback API server (lives while the toggle is on).
   final LocalApiServer _localApi = LocalApiServer();
@@ -119,6 +129,7 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (isDesktop) {
       windowManager.addListener(this);
       trayManager.addListener(this);
@@ -133,10 +144,12 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (isDesktop) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
     }
+    _recoveryTimer?.cancel();
     _cooldownTimer?.cancel();
     _housekeeping?.cancel();
     _localApi.stop();
@@ -250,29 +263,64 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _doLogin() async {
-    if (!mounted) return;
-    setState(() {
-      _busy = true;
-      _loginMessage = '';
-      _loginOk = null;
-    });
+    final typed = _ipCtrl.text.trim();
+    if (typed.isNotEmpty) _client.gatewayIp = typed;
+    final ok = await _login(_passCtrl.text, auto: false);
+    if (ok) _stopSessionRecovery('login ok — watchdog stood down');
+  }
+
+  /// Background re-login used by the recovery watchdog. Same wire flow as
+  /// the Settings button, but it reads the *saved* credentials (so a
+  /// half-typed form can't break it), never blanks the login panel, and
+  /// reports the outcome instead of only painting it.
+  Future<bool> _autoRelogin() async {
+    var password = _passCtrl.text;
+    var ip = _ipCtrl.text.trim();
     try {
-      _client.gatewayIp = _ipCtrl.text.trim();
-      final result = await _client.login(_passCtrl.text);
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('gateway_ip', _client.gatewayIp);
-      await prefs.setString('admin_password', _passCtrl.text);
-      if (!mounted) return;
+      password = prefs.getString('admin_password') ?? password;
+      ip = prefs.getString('gateway_ip') ?? ip;
+    } catch (_) {
+      // Prefs unavailable: fall back to whatever the form holds.
+    }
+    _client.gatewayIp = ip;
+    _logLine('auto-login: reconnecting to $ip…');
+    return _login(password, auto: true);
+  }
+
+  /// One login attempt ([auto] = fired by the watchdog, not the button).
+  Future<bool> _login(String password, {required bool auto}) async {
+    if (!mounted) return false;
+    if (!auto) {
+      setState(() {
+        _busy = true;
+        _loginMessage = '';
+        _loginOk = null;
+      });
+    }
+    try {
+      final result = await _client.login(password);
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('gateway_ip', _client.gatewayIp);
+        await prefs.setString('admin_password', password);
+      } catch (_) {
+        // Non-fatal: the session itself already succeeded/failed.
+      }
+      if (!mounted) return result.success;
       setState(() {
         _loginOk = result.success;
         _loginMessage = result.success
-            ? result.message
+            ? (auto
+                  ? 'Session restored automatically — reconnected after the '
+                      'router came back.'
+                  : result.message)
             : '${result.message}${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
       });
       _logLine(
         result.success
-            ? 'LOGIN ok @ ${_client.gatewayIp}'
-            : 'LOGIN FAILED: ${result.message}',
+            ? '${auto ? 'AUTO-LOGIN' : 'LOGIN'} ok @ ${_client.gatewayIp}'
+            : '${auto ? 'AUTO-LOGIN' : 'LOGIN'} FAILED: ${result.message}',
       );
       if (result.raw.isNotEmpty && !result.success) {
         _logLine('raw reply: ${result.raw}');
@@ -281,30 +329,40 @@ class _DashboardPageState extends State<DashboardPage>
         _cooldownTimer?.cancel();
         _cooldownUntil = null;
         _startPoller();
-      } else {
-        // Read the real lockout counters (free GET) instead of guessing.
-        final (failsLeft, lockSecs) = await _client.getLoginCounters();
-        final counterInfo = failsLeft >= 0
-            ? ' Attempts left: $failsLeft${lockSecs > 0 ? ', lockout lifts in ${lockSecs}s' : ''}.'
-            : '';
-        if (!mounted) return;
-        setState(() {
-          _loginMessage =
-              '${_loginMessage.split('\n').first}$counterInfo'
-              '${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
-        });
-        _logLine('counters: failsLeft=$failsLeft lockSecs=$lockSecs');
-        _startCooldown(lockSecs > 0 ? lockSecs + 5 : 10);
+        return true;
       }
+      // Read the real lockout counters (free GET) instead of guessing.
+      final (failsLeft, lockSecs) = await _client.getLoginCounters();
+      final counterInfo = failsLeft >= 0
+          ? ' Attempts left: $failsLeft${lockSecs > 0 ? ', lockout lifts in ${lockSecs}s' : ''}.'
+          : '';
+      if (!mounted) return false;
+      setState(() {
+        _loginMessage =
+            '${_loginMessage.split('\n').first}$counterInfo'
+            '${result.raw.isNotEmpty ? '\nRouter said: ${result.raw}' : ''}';
+      });
+      _logLine('counters: failsLeft=$failsLeft lockSecs=$lockSecs');
+      _startCooldown(lockSecs > 0 ? lockSecs + 5 : 10);
+      // Router never answered: keep the watchdog on it (the MiFi may still
+      // be booting). A wrong password stays a manual Settings fix so the
+      // firmware's attempt budget is never burned by an auto-retry loop.
+      if (recovery.shouldKeepWatching(result)) {
+        _armSessionRecovery(
+          reason: 'router unreachable at login — watching for the link',
+        );
+      }
+      return false;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _loginOk = false;
         _loginMessage = 'Unexpected error: $e';
       });
       _logLine('LOGIN error: $e');
+      return false;
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (!auto && mounted) setState(() => _busy = false);
     }
   }
 
@@ -407,12 +465,130 @@ class _DashboardPageState extends State<DashboardPage>
       onStatus: (s) {
         if (mounted) setState(() => _status = s);
         _smartTick(s);
+        _watchSession(s);
       },
-      onUnreachable: _smartUnreachable,
+      onUnreachable: _onPollerUnreachable,
       onDevices: _deviceTick,
     )..start();
     _applyMonitorSettings();
     _logLine('poller started — minimize to tray to keep polling');
+  }
+
+  /// Router out of reach for three straight polls: surface the smart-alert
+  /// signal and hand over to the watchdog, so the session comes back by
+  /// itself when the link does.
+  void _onPollerUnreachable() {
+    _smartUnreachable();
+    _armSessionRecovery(
+      reason: 'router unreachable — watching for the link to return',
+    );
+  }
+
+  /// A poll that reaches the router but carries none of the fields this
+  /// firmware only returns to a logged-in caller: the MiFi rebooted and
+  /// took the session cookie with it. Stop pretending everything is fine
+  /// and let the watchdog re-authenticate.
+  void _watchSession(Map<String, dynamic> s) {
+    if (!recovery.looksHollow(s)) return;
+    _logLine('status poll came back empty — session lost (router rebooted?)');
+    _poller?.stop();
+    if (mounted) setState(() => _loginOk = false);
+    _armSessionRecovery(
+      reason: 'session gone — watching for the MiFi to come back',
+    );
+  }
+
+  // ── Background re-login watchdog (reboot recovery) ────────────────
+
+  /// Arm the watchdog (idempotent): probe until the router answers, then
+  /// reuse the saved credentials to re-open the session. Never touches
+  /// the firmware while its lockout counter is running.
+  void _armSessionRecovery({String? reason}) {
+    if (!mounted || _recoveryArmed) return;
+    _recoveryArmed = true;
+    _recoveryProbes = 0;
+    _logLine(reason ?? 'session watchdog armed — auto re-login when online');
+    unawaited(_runRecoveryProbe());
+  }
+
+  void _stopSessionRecovery(String reason) {
+    _recoveryTimer?.cancel();
+    _recoveryTimer = null;
+    if (!_recoveryArmed) return;
+    _recoveryArmed = false;
+    _recoveryProbes = 0;
+    _logLine(reason);
+  }
+
+  /// One watchdog pass: is the router back, and if so, does our session
+  /// still exist? Re-login only when the answer is "back, but logged out".
+  Future<void> _runRecoveryProbe() async {
+    if (!mounted || _recovering) return;
+    _recovering = true;
+    _recoveryProbes++;
+    try {
+      // Never spend a login attempt while the firmware lockout runs.
+      if (_cooldownLeft > 0) return;
+      Map<String, dynamic> probe;
+      try {
+        probe = await _client.getStatus(
+          cmds: const ['battery_vol_percent', 'network_type'],
+        );
+      } catch (_) {
+        // Link still down (router booting / WiFi re-associating).
+        return;
+      }
+      if (!mounted) return;
+      if (recovery.looksAuthenticated(probe)) {
+        // The cookie survived: nothing to re-authenticate.
+        setState(() => _loginOk = true);
+        _stopSessionRecovery('router back — session still valid, no login needed');
+        _startPoller();
+        await _notifyNow(
+          'MiFi reconnected',
+          'Router is answering again — monitoring resumed.',
+        );
+        return;
+      }
+      _logLine(
+        'MiFi answered without a session — auto re-login '
+        '(probe $_recoveryProbes)',
+      );
+      final ok = await _autoRelogin();
+      if (ok) {
+        _stopSessionRecovery('auto re-login ok — session restored');
+        await _notifyNow(
+          'MiFi reconnected',
+          'Background auto-login restored the session after the reboot.',
+        );
+      }
+    } finally {
+      _recovering = false;
+      // Keep watching (with a backing-off cadence) until the session is
+      // ours again or the cooldown/watchdog is stood down.
+      if (_recoveryArmed && mounted) {
+        _recoveryTimer?.cancel();
+        _recoveryTimer = Timer(
+          recovery.recoveryProbeDelay(_recoveryProbes),
+          () => unawaited(_runRecoveryProbe()),
+        );
+      }
+    }
+  }
+
+  /// Devices rarely reboot while the app is in the foreground — coming
+  /// back from the background is exactly when the link has returned, so
+  /// probe immediately rather than waiting for the poller's next strike.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    if (_recoveryArmed) {
+      _recoveryTimer?.cancel();
+      _recoveryTimer = null;
+      unawaited(_runRecoveryProbe());
+    } else if (!_connected && (_poller?.running ?? false)) {
+      _armSessionRecovery(reason: 'app resumed — checking the router link');
+    }
   }
 
   /// Phase 7: apply Desk/Travel + battery-notification prefs to the
