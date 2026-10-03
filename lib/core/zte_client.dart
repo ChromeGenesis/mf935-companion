@@ -420,10 +420,19 @@ class ZteClient {
             cmds: const ['ussd_data_info'],
             multiData: false,
           );
-          final text = sanitizeUssdText(
-            decodeUcs2Hex('${m['ussd_data'] ?? ''}'),
+          final decoded = decodeUcs2Hex('${m['ussd_data'] ?? ''}');
+          final text = sanitizeUssdText(decoded);
+          // Both texts travel: `text` is what the console renders,
+          // `decoded` is what the modem actually said (the UI shows it
+          // whenever the sanitizer had to guess).
+          return UssdResult(
+            true,
+            text,
+            '${m['ussd_action'] ?? ''}',
+            flag,
+            '',
+            decoded,
           );
-          return UssdResult(true, text, '${m['ussd_action'] ?? ''}', flag, '');
         } catch (e) {
           return UssdResult(false, '', '', flag, 'Reply fetch failed: $e');
         }

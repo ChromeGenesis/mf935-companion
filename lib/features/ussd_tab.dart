@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/capability.dart';
@@ -61,6 +62,12 @@ class _UssdTabState extends State<UssdTab> {
   /// toggle that replaces the bookmark button while a menu is open —
   /// and every new menu resets to keypad.
   bool _replyViaKeyboard = false;
+
+  /// Show the modem's unsanitized reply instead of the rendered one.
+  /// The sanitizer is a heuristic — when the text still looks wrong,
+  /// the honest fallback is the bytes the device actually sent. Off
+  /// again for every new reply (never sticks across sessions).
+  bool _showRaw = false;
 
   bool get _replyMode => _last?.needsReply == true;
 
@@ -242,6 +249,7 @@ class _UssdTabState extends State<UssdTab> {
       setState(() {
         _last = r;
         _replyViaKeyboard = false; // every new menu starts on the keypad
+        _showRaw = false; // raw view never leaks across replies
         _history = pushUssdHistory(
           _history,
           UssdHistoryEntry(
@@ -249,6 +257,7 @@ class _UssdTabState extends State<UssdTab> {
             reply: r.success ? r.text : r.error,
             ok: r.success,
             at: DateTime.now(),
+            rawReply: r.raw,
           ),
         );
       });
@@ -325,10 +334,12 @@ class _UssdTabState extends State<UssdTab> {
             reply: r.success ? r.text : r.error,
             ok: r.success,
             at: DateTime.now(),
+            rawReply: r.raw,
           ),
         );
         _replyCtrl.clear();
         _replyViaKeyboard = false; // next menu level: keypad again
+        _showRaw = false;
       });
       _persistHistory();
       widget.log(r.success ? 'USSD reply ok' : 'USSD reply failed: ${r.error}');
@@ -520,8 +531,16 @@ class _UssdTabState extends State<UssdTab> {
   /// the cap grows while a reply is expected so nothing is clipped.
   Widget _responseBox(ZteColors c) {
     final r = _last;
-    final text = r == null ? null : (r.success ? r.text : r.error);
     final ok = r?.success ?? true;
+    // Raw = what the modem actually sent, before the sanitizer guessed
+    // where the line breaks were. Offered only when the two differ.
+    final rawAvailable = r != null && !r.rawWasClean;
+    final showingRaw = rawAvailable && _showRaw;
+    final text = r == null
+        ? null
+        : (showingRaw
+              ? r.raw
+              : (r.success ? r.text : r.error));
     return Container(
       key: const Key('ussd-response-box'),
       width: double.infinity,
@@ -539,25 +558,147 @@ class _UssdTabState extends State<UssdTab> {
               : c.borderSubtle,
         ),
       ),
-      child: text == null
-          // Plain text (not an Align): the empty panel stays at its
-          // minHeight instead of inflating to the maxHeight cap.
-          ? Text(
-              'No reply yet — send a code to begin a session.',
-              style: TextStyle(color: c.textMuted, fontSize: 12.5),
-            )
-          : SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              child: SelectableText(
-                text,
-                style: TextStyle(
-                  color: ok ? c.textPrimary : c.danger,
-                  fontSize: 13,
-                  height: 1.5,
+      // The panel is height-capped, so its own text scaling is capped
+      // too (same reasoning as the keypad): at 2x system text a single
+      // placeholder line wraps past the cap and blows the layout.
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (text != null)
+              _responseToolbar(c, rawAvailable: rawAvailable),
+            if (text == null)
+              // Plain text (not an Align): the empty panel stays at its
+              // minHeight instead of inflating to the maxHeight cap.
+              Text(
+                'No reply yet — send a code to begin a session.',
+                style: TextStyle(color: c.textMuted, fontSize: 12.5),
+              )
+            else
+              Flexible(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: SelectableText(
+                    text,
+                    style: TextStyle(
+                      // Raw view is deliberately monospaced: control
+                      // bytes and stray breaks only *look* wrong when you
+                      // can see where the characters actually fall.
+                      fontFamily: showingRaw ? 'monospace' : null,
+                      color: showingRaw
+                          ? c.textSecondary
+                          : (ok ? c.textPrimary : c.danger),
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
                 ),
               ),
-            ),
+          ],
+        ),
+      ),
     );
+  }
+
+  /// Two small controls above the reply text: copy it anywhere, and flip
+  /// between the rendered and the modem's raw text when they differ.
+  Widget _responseToolbar(ZteColors c, {required bool rawAvailable}) {
+    final r = _last!;
+    final shown = _showRaw ? (r.raw) : (r.success ? r.text : r.error);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          if (rawAvailable)
+            _toolChip(
+              c,
+              key: const Key('ussd-raw-toggle'),
+              icon: Icons.raw_on,
+              label: _showRaw ? 'RAW' : 'raw',
+              active: _showRaw,
+              tooltip: _showRaw
+                  ? 'Show the repaired reply'
+                  : "Show the modem's untouched text",
+              onTap: () => setState(() => _showRaw = !_showRaw),
+            ),
+          if (rawAvailable) const SizedBox(width: 8),
+          _toolChip(
+            c,
+            key: const Key('ussd-copy-reply'),
+            icon: Icons.copy_all_outlined,
+            label: 'copy',
+            tooltip: 'Copy this reply to the clipboard',
+            onTap: () => _copyToClipboard(shown, 'Reply copied'),
+          ),
+          const Spacer(),
+          if (r.flag.isNotEmpty)
+            Text(
+              'flag ${r.flag}',
+              style: TextStyle(color: c.textMuted, fontSize: 10),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Small bordered text+icon control used by the response toolbar.
+  Widget _toolChip(
+    ZteColors c, {
+    required Key key,
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required VoidCallback onTap,
+    bool active = false,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        key: key,
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: active ? c.accent.withAlpha(45) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: active ? c.accent.withAlpha(140) : c.borderSubtle,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 12, color: active ? c.accentText : c.textMuted),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: active ? c.accentText : c.textMuted,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Clipboard with a visible confirmation (a copied USSD reply is the
+  /// fastest way to hand evidence to a carrier chatbot).
+  Future<void> _copyToClipboard(String text, String what) async {
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    widget.log('$what (${text.length} chars)');
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(what)));
   }
 
   /// Compact send control used inside the answer bar: submits the reply
@@ -708,6 +849,12 @@ class _UssdTabState extends State<UssdTab> {
       splashColor: c.accent.withAlpha(40),
       highlightColor: c.accent.withAlpha(24),
       onTap: onTap ?? () => _key(k),
+      // The 0 key advertises '+' in its sublabel (stock dialer parity),
+      // so it has to deliver it: tap = 0, long-press = '+'. Only in
+      // dialer mode — a menu reply must stay exactly what was typed.
+      onLongPress: (k == '0' && onTap == null)
+          ? () => _key('+')
+          : null,
       child: Container(
         alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(vertical: 3),
@@ -970,6 +1117,10 @@ class _UssdTabState extends State<UssdTab> {
       onTap: h.ok && h.request.startsWith('*')
           ? () => setState(() => _codeCtrl.text = h.request)
           : null,
+      // Long-press = inspect: the full reply plus, when it differs, the
+      // modem's untouched text. Tapping only recalls the code, so this
+      // is the one place a stored entry can be audited.
+      onLongPress: () => _showReplyInspector(h),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 7),
         child: Column(
@@ -1003,6 +1154,103 @@ class _UssdTabState extends State<UssdTab> {
             const SizedBox(height: 6),
             Divider(color: c.borderSubtle, height: 1),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Full-text inspector for one history entry: the repaired reply, the
+  /// modem's raw text when they differ, and copy buttons for both.
+  void _showReplyInspector(UssdHistoryEntry h) {
+    final c = context.zc;
+    final repaired = ZteClient.sanitizeUssdText(h.reply);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: GlassModal(
+          icon: Icons.subject,
+          title: h.request,
+          subtitle: '${ZteClient.timeAgo(h.at)} · '
+              '${h.ok ? 'ok' : 'failed'}',
+          body: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 260),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    repaired,
+                    style: TextStyle(
+                      color: h.ok ? c.textPrimary : c.danger,
+                      fontSize: 12.5,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+              if (h.hasRaw) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'RAW — AS RECEIVED',
+                  style: TextStyle(
+                    color: c.accentText,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 180),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      h.rawReply,
+                      style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Close'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => _copyToClipboard(
+                      repaired,
+                      'Reply copied',
+                    ),
+                    icon: const Icon(Icons.copy_all_outlined, size: 15),
+                    label: const Text('Copy'),
+                  ),
+                  if (h.hasRaw) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: () => _copyToClipboard(
+                        h.rawReply,
+                        'Raw reply copied',
+                      ),
+                      icon: const Icon(Icons.raw_on, size: 15),
+                      label: const Text('Copy raw'),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

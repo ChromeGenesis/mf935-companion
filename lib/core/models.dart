@@ -40,6 +40,11 @@ class LoginResult {
 
 /// Outcome of a USSD transaction: [text] is the decoded reply, [action]
 // "1" means the network waits for a reply (interactive menu).
+///
+/// [raw] is the decoded reply *before* [sanitizeUssdText] ran. The
+/// sanitizer is a set of heuristics about how this firmware mangles line
+/// breaks, so whenever the rendered text looks wrong the only honest
+/// answer is to show what the modem actually said — the UI offers both.
 class UssdResult {
   final bool success;
   final String text;
@@ -47,9 +52,23 @@ class UssdResult {
   final String flag;
   final String error;
 
-  const UssdResult(this.success, this.text, this.action, this.flag, this.error);
+  /// Decoded but unsanitized reply (empty when the sanitizer changed
+  /// nothing, i.e. [rawWasClean] is true).
+  final String raw;
+
+  const UssdResult(
+    this.success,
+    this.text,
+    this.action,
+    this.flag,
+    this.error, [
+    this.raw = '',
+  ]);
 
   bool get needsReply => success && action == '1';
+
+  /// True when the reply carried no mangling worth showing raw.
+  bool get rawWasClean => raw.isEmpty || raw == text;
 }
 
 /// One SMS from the modem store. [content] is decoded to readable text.

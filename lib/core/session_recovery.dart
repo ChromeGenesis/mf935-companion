@@ -19,6 +19,7 @@ library;
 /// keeps the retry cadence polite: the firmware locks out after a few
 /// rapid LOGIN attempts, so the watchdog must never hammer a booting
 /// router.
+import 'log_store.dart';
 import 'models.dart';
 
 /// True when a status reply carries any of the fields this firmware only
@@ -54,4 +55,59 @@ bool shouldKeepWatching(LoginResult result) =>
 Duration recoveryProbeDelay(int probes) {
   if (probes <= 6) return const Duration(seconds: 5);
   return const Duration(seconds: 15);
+}
+
+// ── Stale-data honesty ─────────────────────────────────────────────
+
+/// How much the numbers currently on screen can be trusted.
+enum DataTrust {
+  /// Polled within the current session: current.
+  live,
+
+  /// The session is gone but the last good poll is still on screen.
+  /// True numbers, unknown age — must be labelled, never presented as
+  /// if they were just measured.
+  cached,
+
+  /// Nothing has ever been read from the device.
+  unknown,
+}
+
+/// Trust level of the status snapshot on screen. Pure + tested.
+///
+/// [lastAt] is when the displayed snapshot was polled (null = never),
+/// [sessionLive] whether we currently hold a working session. A live
+/// session with an old snapshot still counts as live — the poller owns
+/// the cadence — while a dead session always downgrades whatever is left
+/// on screen.
+DataTrust trustOf({
+  required bool sessionLive,
+  DateTime? lastAt,
+  DateTime? now,
+}) {
+  if (lastAt == null) return DataTrust.unknown;
+  return sessionLive ? DataTrust.live : DataTrust.cached;
+}
+
+/// Banner text for the dashboard above stale values, or '' when there is
+/// nothing to warn about. Never guesses: the age always comes from
+/// [lastAt], so a snapshot from three hours ago says three hours ago.
+String staleBannerText({
+  required bool sessionLive,
+  DateTime? lastAt,
+  DateTime? now,
+}) {
+  final trust = trustOf(sessionLive: sessionLive, lastAt: lastAt, now: now);
+  if (trust != DataTrust.cached) return '';
+  final n = now ?? DateTime.now();
+  final age = n.difference(lastAt!);
+  if (age.isNegative || age.inSeconds < 60) {
+    return 'Session lost — showing the last reading from ${formatClock(lastAt)}.';
+  }
+  if (age.inHours < 1) {
+    return 'Session lost — showing the last reading from '
+        '${formatClock(lastAt)} (${age.inMinutes} min ago).';
+  }
+  return 'Session lost — the reading below is from '
+      '${formatClock(lastAt)}, ${age.inHours}h ago. Not live.';
 }

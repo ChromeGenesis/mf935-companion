@@ -19,6 +19,7 @@ import '../core/capability.dart';
 import '../core/advanced.dart';
 import '../core/device_store.dart';
 import '../core/diagnostics.dart';
+import '../core/log_store.dart';
 import '../core/monitor_modes.dart';
 import '../core/platform.dart';
 import '../core/session_recovery.dart' as recovery;
@@ -56,7 +57,21 @@ class _DashboardPageState extends State<DashboardPage>
   final _ipCtrl = TextEditingController(text: '192.168.0.1');
   final _passCtrl = TextEditingController();
   Map<String, dynamic> _status = {};
+
+  /// When [_status] was polled. Drives the stale-data banner: after a
+  /// session loss the numbers stay on screen (they are still true, just
+  /// old), and this is what says how old.
+  DateTime? _statusAt;
+
+  /// Activity log. Lines live in RAM for display and in [_logStore] for
+  /// good — a reboot incident is useless if the evidence dies with the
+  /// window. Newest first.
   final List<String> _log = [];
+
+  /// Durable log + typed session events (login, session lost, reboot…).
+  /// Writes are batched; durability-critical lines flush immediately.
+  final LogStore _logStore = LogStore();
+  Timer? _logFlush;
   // Raw balance replies (MTN *323*4# / Airtel *323*1#): archived for
   // the Settings tab only — the primary screen surfaces parsed
   // results, never verbose modem text.
@@ -152,6 +167,8 @@ class _DashboardPageState extends State<DashboardPage>
     _recoveryTimer?.cancel();
     _cooldownTimer?.cancel();
     _housekeeping?.cancel();
+    _logFlush?.cancel();
+    unawaited(_logStore.flush());
     _localApi.stop();
     _balanceFeed.dispose();
     _signalFeed.dispose();
@@ -166,10 +183,21 @@ class _DashboardPageState extends State<DashboardPage>
     final ip = prefs.getString('gateway_ip') ?? '192.168.0.1';
     final pw = prefs.getString('admin_password') ?? 'admin';
     final lastFired = await SmartAlertStore.loadLastFired();
+    // Restore the persisted log first so anything logged this session
+    // lands under what came before it.
+    var restored = <String>[];
+    try {
+      restored = (await _logStore.load())
+          .map(formatLogLine)
+          .toList(growable: false);
+    } catch (_) {}
     if (!mounted) return;
     _alerts.lastFired.addAll(lastFired);
     _applyLocalApi(); // persisted toggle takes effect on launch
     setState(() {
+      _log
+        ..clear()
+        ..addAll(restored);
       _ipCtrl.text = ip;
       _passCtrl.text = pw;
       _client.gatewayIp = ip;
@@ -189,10 +217,11 @@ class _DashboardPageState extends State<DashboardPage>
       if ('${probe['battery_vol_percent'] ?? ''}'.isNotEmpty) {
         setState(() {
           _status = probe;
+          _statusAt = DateTime.now();
           _loginOk = true;
           _loginMessage = 'Session restored — no login needed.';
         });
-        _logLine('saved session still valid @ ${_client.gatewayIp}');
+        _event(LogKind.login, 'saved session still valid @ ${_client.gatewayIp}');
         _startPoller();
         return;
       }
@@ -205,11 +234,59 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _logLine(String line) {
+    _record(LogKind.info, line, stamp: true);
+  }
+
+  /// Log a typed session event (not just a line): the durable half that
+  /// survives a restart and feeds incident reports. [stamp] adds the
+  /// clock prefix for the display list.
+  void _event(LogKind kind, String line, {bool durable = true}) {
+    _record(kind, line, stamp: true, durable: durable);
+  }
+
+  void _record(
+    LogKind kind,
+    String line, {
+    required bool stamp,
+    bool durable = false,
+  }) {
+    final at = DateTime.now();
+    if (durable) {
+      _logStore.append(kind, line, at: at);
+      _scheduleLogFlush();
+    }
     if (!mounted) return;
     setState(() {
-      _log.insert(0, '${TimeOfDay.now().format(context)}  $line');
+      _log.insert(0, stamp ? formatLogLine(SessionEvent(at: at, kind: kind, message: line)) : line);
       if (_log.length > 200) _log.removeLast();
     });
+  }
+
+  /// Batch the prefs write — a single incident logs several lines at
+  /// once and each write is a disk hit. Durability-critical lines call
+  /// [_flushLogNow] instead.
+  void _scheduleLogFlush() {
+    _logFlush?.cancel();
+    _logFlush = Timer(const Duration(milliseconds: 600), _flushLogNow);
+  }
+
+  Future<void> _flushLogNow() async {
+    _logFlush?.cancel();
+    _logFlush = null;
+    try {
+      await _logStore.flush();
+    } catch (_) {
+      // A log that cannot be written is a degraded nicety, never a crash.
+    }
+  }
+
+  /// Settings → clear log: RAM and storage together, so a cleared log
+  /// does not resurrect itself on the next launch.
+  Future<void> _clearLog() async {
+    try {
+      await _logStore.clear();
+    } catch (_) {}
+    if (mounted) setState(() => _log.clear());
   }
 
   /// Archive a raw balance reply for the Settings tab (verbose modem
@@ -322,6 +399,15 @@ class _DashboardPageState extends State<DashboardPage>
             ? '${auto ? 'AUTO-LOGIN' : 'LOGIN'} ok @ ${_client.gatewayIp}'
             : '${auto ? 'AUTO-LOGIN' : 'LOGIN'} FAILED: ${result.message}',
       );
+      // Login outcomes are the durable spine of the log: flushed at once
+      // so a crash right after this still leaves the evidence behind.
+      _logStore.append(
+        auto ? LogKind.recovered : LogKind.login,
+        result.success
+            ? '${auto ? 'AUTO-LOGIN' : 'LOGIN'} ok @ ${_client.gatewayIp}'
+            : '${auto ? 'AUTO-LOGIN' : 'LOGIN'} FAILED: ${result.message}',
+      );
+      unawaited(_flushLogNow());
       if (result.raw.isNotEmpty && !result.success) {
         _logLine('raw reply: ${result.raw}');
       }
@@ -396,7 +482,10 @@ class _DashboardPageState extends State<DashboardPage>
     try {
       final s = await _client.getStatus();
       if (!mounted) return;
-      setState(() => _status = s);
+      setState(() {
+        _status = s;
+        _statusAt = DateTime.now();
+      });
       _logLine('status poll ok');
     } catch (e) {
       _logLine('status poll failed: $e');
@@ -463,7 +552,12 @@ class _DashboardPageState extends State<DashboardPage>
       client: _client,
       notifications: _notifications,
       onStatus: (s) {
-        if (mounted) setState(() => _status = s);
+        if (mounted) {
+          setState(() {
+            _status = s;
+            _statusAt = DateTime.now();
+          });
+        }
         _smartTick(s);
         _watchSession(s);
       },
@@ -479,6 +573,10 @@ class _DashboardPageState extends State<DashboardPage>
   /// itself when the link does.
   void _onPollerUnreachable() {
     _smartUnreachable();
+    _event(
+      LogKind.unreachable,
+      'router unreachable — watching for the link to return',
+    );
     _armSessionRecovery(
       reason: 'router unreachable — watching for the link to return',
     );
@@ -490,7 +588,12 @@ class _DashboardPageState extends State<DashboardPage>
   /// and let the watchdog re-authenticate.
   void _watchSession(Map<String, dynamic> s) {
     if (!recovery.looksHollow(s)) return;
-    _logLine('status poll came back empty — session lost (router rebooted?)');
+    _event(
+      LogKind.sessionLost,
+      'status poll came back empty — session lost (router rebooted?)',
+      durable: true,
+    );
+    unawaited(_flushLogNow());
     _poller?.stop();
     if (mounted) setState(() => _loginOk = false);
     _armSessionRecovery(
@@ -542,6 +645,10 @@ class _DashboardPageState extends State<DashboardPage>
       if (recovery.looksAuthenticated(probe)) {
         // The cookie survived: nothing to re-authenticate.
         setState(() => _loginOk = true);
+        _event(
+          LogKind.recovered,
+          'router back — session still valid, no login needed',
+        );
         _stopSessionRecovery('router back — session still valid, no login needed');
         _startPoller();
         await _notifyNow(
@@ -556,6 +663,7 @@ class _DashboardPageState extends State<DashboardPage>
       );
       final ok = await _autoRelogin();
       if (ok) {
+        _event(LogKind.recovered, 'auto re-login ok — session restored');
         _stopSessionRecovery('auto re-login ok — session restored');
         await _notifyNow(
           'MiFi reconnected',
@@ -680,7 +788,7 @@ class _DashboardPageState extends State<DashboardPage>
       final rb = await ScheduledReboot.load();
       if (rb.dueAt(now)) {
         await const ScheduledReboot().save();
-        _logLine('scheduled reboot firing');
+        _event(LogKind.reboot, 'scheduled reboot firing');
         await _notifyNow('MiFi reboot', 'Scheduled reboot firing now.');
         try {
           await _client.reboot();
@@ -698,7 +806,10 @@ class _DashboardPageState extends State<DashboardPage>
       final s = await _client.getStatus();
       final t = await _client.getTrafficStats();
       if (!mounted) return;
-      setState(() => _status = s);
+      setState(() {
+        _status = s;
+        _statusAt = DateTime.now();
+      });
       _logLine(
         'scheduled diagnostic: signal ${s['signalbar'] ?? '?'}/5 '
         '${s['network_type'] ?? ''} · battery '
@@ -801,6 +912,7 @@ class _DashboardPageState extends State<DashboardPage>
           client: _client,
         connected: _connected,
         status: _status,
+        statusAt: _statusAt,
         log: _logLine,
         notify: _notifyNow,
         onRefreshNow: _refreshNow,
@@ -842,7 +954,7 @@ class _DashboardPageState extends State<DashboardPage>
       onTest: _testConnection,
       onPasswordSubmit: _doLogin,
       logLines: _log,
-      onClearLog: () => setState(() => _log.clear()),
+      onClearLog: _clearLog,
       onExportDiagnostics: _exportDiagnostics,
       onTestAlert: _testAlertNow,
       unsupported: capabilities.unsupported,

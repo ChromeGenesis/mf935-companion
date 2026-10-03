@@ -82,24 +82,38 @@ List<UssdSaved> upsertUssdCode(List<UssdSaved> saved, UssdSaved result) {
 /// One USSD transaction worth remembering: the dialed code (or "↳ n"
 /// for menu replies), the decoded reply/error, ok flag and timestamp.
 /// Survives restarts — balance answers never die with the app.
+///
+/// [rawReply] keeps the modem's untouched text when it differs from
+/// [reply]; entries saved before that field existed simply carry none.
 class UssdHistoryEntry {
   final String request;
   final String reply;
   final bool ok;
   final DateTime at;
 
+  /// The modem's unsanitized text when it differs from [reply]. The
+  /// reply sanitizer is a set of heuristics about how this firmware
+  /// mangles line breaks; keeping the untouched text alongside means a
+  /// wrong guess can be audited later instead of argued about.
+  final String rawReply;
+
   const UssdHistoryEntry({
     required this.request,
     required this.reply,
     required this.ok,
     required this.at,
+    this.rawReply = '',
   });
+
+  /// True when a raw capture exists and says something different.
+  bool get hasRaw => rawReply.isNotEmpty && rawReply != reply;
 
   Map<String, dynamic> toJson() => {
     'request': request,
     'reply': reply,
     'ok': ok,
     'at': at.millisecondsSinceEpoch,
+    if (hasRaw) 'raw': rawReply,
   };
 
   factory UssdHistoryEntry.fromJson(Map<String, dynamic> j) =>
@@ -110,6 +124,7 @@ class UssdHistoryEntry {
         at: DateTime.fromMillisecondsSinceEpoch(
           (j['at'] as num?)?.toInt() ?? 0,
         ),
+        rawReply: '${j['raw'] ?? ''}',
       );
 }
 

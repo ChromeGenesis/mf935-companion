@@ -9,6 +9,7 @@ import 'package:zte_mf935_app/core/advanced.dart';
 import 'package:zte_mf935_app/features/ussd_saved.dart';
 import 'package:zte_mf935_app/core/device_store.dart';
 import 'package:zte_mf935_app/core/incident_report.dart';
+import 'package:zte_mf935_app/core/log_store.dart';
 import 'package:zte_mf935_app/core/monitor_modes.dart';
 import 'package:zte_mf935_app/core/ndt7_client.dart';
 import 'package:zte_mf935_app/core/session_recovery.dart';
@@ -18,6 +19,7 @@ import 'package:zte_mf935_app/core/speed_history.dart';
 import 'package:zte_mf935_app/core/speed_test.dart';
 import 'package:zte_mf935_app/core/theme.dart';
 import 'package:zte_mf935_app/core/widgets.dart';
+import 'package:zte_mf935_app/features/status_tab.dart';
 import 'package:zte_mf935_app/features/ussd_tab.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
 
@@ -1127,6 +1129,198 @@ void main() {
         .position;
     expect(listScroll.maxScrollExtent, greaterThan(0));
   });
+
+  testWidgets("USSD shows the modem's raw reply when repair had to guess", (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final client = _FakeUssdClient();
+    await pumpUssd(tester, client);
+    await tester.enterText(find.byKey(const Key('ussd-code-field')), '*312#');
+    await tester.tap(find.byIcon(Icons.call));
+    await tester.pumpAndSettle();
+
+    // The repaired text is what renders by default.
+    expect(find.textContaining('1 My Airtel Offer'), findsWidgets);
+    // Raw differs here, so the toggle is offered — and a clean reply
+    // would not offer it.
+    final toggle = find.byKey(const Key('ussd-raw-toggle'));
+    expect(toggle, findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    // The untouched text is one cable-eaten line: no inserted breaks.
+    final box = tester.widgetList<SelectableText>(find.byType(SelectableText));
+    expect(
+      box.map((w) => w.data ?? '').any((t) => t.contains('Offer\r2 Data')),
+      isTrue,
+      reason: 'raw view must show what the modem sent, unaltered',
+    );
+
+    // Copy is always available (evidence for a carrier chatbot).
+    expect(find.byKey(const Key('ussd-copy-reply')), findsOneWidget);
+  });
+
+  testWidgets('USSD 0 key: long-press delivers the advertised +', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpUssd(tester, ZteClient());
+    await tester.tap(find.text('0').last);
+    await tester.pumpAndSettle();
+    // The dialer echoes the typed digit, so target the keypad tile.
+    await tester.longPress(find.text('0').last);
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('ussd-code-field')),
+    );
+    expect(field.controller!.text, contains('+'));
+    expect(field.controller!.text, contains('0'));
+  });
+
+  // ── Persisted session log + stale-data honesty ─────────────────────
+
+  test('Session log persists across restarts and rotates oldest-first', () async {
+    final backend = MemoryLogBackend();
+    final store = LogStore(backend: backend, maxEvents: 3);
+    store.append(
+      LogKind.login,
+      'LOGIN ok @ 192.168.0.1',
+      at: DateTime(2026, 1, 2, 3, 4, 5),
+    );
+    store.append(
+      LogKind.sessionLost,
+      'status poll came back empty — session lost',
+      at: DateTime(2026, 1, 2, 3, 5, 5),
+    );
+    // Newest first, and formatted locale-independently so a restored
+    // log reads the same everywhere.
+    expect(store.events.first.kind, LogKind.sessionLost);
+    expect(
+      formatLogLine(store.events.last),
+      '03:04:05  LOGIN ok @ 192.168.0.1',
+    );
+    await store.flush();
+
+    // Rotation: only the newest [maxEvents] survive a long session.
+    for (var i = 0; i < 6; i++) {
+      store.append(LogKind.info, 'poll $i', at: DateTime(2026, 1, 2, 4, i));
+    }
+    await store.flush();
+    expect(store.events.length, 3);
+    expect(store.events.first.message, 'poll 5');
+
+    // Survives a restart — this is the whole point (a reboot incident
+    // used to die with the window).
+    final reopened = LogStore(backend: backend, maxEvents: 10);
+    final loaded = await reopened.load();
+    expect(loaded.length, 3);
+    expect(loaded.first.message, 'poll 5');
+
+    // Incident reports want events, not routine progress.
+    expect(
+      notableEvents(store.events).map((e) => e.kind),
+      everyElement(isNot(LogKind.info)),
+    );
+    expect(store.exportText(), contains('[info]'));
+
+    // A corrupt payload reads as empty — a broken log never blocks launch.
+    SharedPreferences.setMockInitialValues({logPrefsKey: 'not json'});
+    expect(await const PrefsLogBackend().load(), isEmpty);
+
+    // Clearing wipes storage too, so it cannot resurrect on next launch.
+    await store.clear();
+    expect((await reopened.load()), isEmpty);
+  });
+
+  test('Stale data is labelled with its real age, never as live', () {
+    final last = DateTime(2026, 1, 2, 14, 3);
+    // No snapshot at all: nothing to label.
+    expect(trustOf(sessionLive: false), DataTrust.unknown);
+    expect(
+      staleBannerText(sessionLive: false, lastAt: null),
+      isEmpty,
+    );
+    // Live session: the poller owns the cadence, no banner.
+    expect(trustOf(sessionLive: true, lastAt: last), DataTrust.live);
+    expect(staleBannerText(sessionLive: true, lastAt: last), isEmpty);
+
+    // Session gone: the numbers stay, but say how old they are.
+    expect(
+      trustOf(sessionLive: false, lastAt: last),
+      DataTrust.cached,
+    );
+    expect(
+      staleBannerText(
+        sessionLive: false,
+        lastAt: last,
+        now: last.add(const Duration(seconds: 30)),
+      ),
+      contains('14:03'),
+    );
+    expect(
+      staleBannerText(
+        sessionLive: false,
+        lastAt: last,
+        now: last.add(const Duration(minutes: 42)),
+      ),
+      contains('42 min ago'),
+    );
+    expect(
+      staleBannerText(
+        sessionLive: false,
+        lastAt: last,
+        now: last.add(const Duration(hours: 3)),
+      ),
+      contains('3h ago'),
+    );
+  });
+
+  testWidgets('Status tab dims and labels the last poll after session loss', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(980, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final at = DateTime.now().subtract(const Duration(minutes: 12));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildZteTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: StatusTab(
+              client: ZteClient(),
+              connected: false,
+              status: {
+                'battery_vol_percent': '81',
+                'network_type': 'LTE',
+                'signalbar': '4',
+                'network_provider': 'MTN',
+              },
+              statusAt: at,
+              log: (_) {},
+              notify: (_, _) async {},
+              onRefreshNow: () async {},
+              balanceFeed: ValueNotifier<DataBalance?>(null),
+              signalFeed: ValueNotifier<SignalSample?>(null),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final banner = find.byKey(const Key('status-stale-banner'));
+    expect(banner, findsOneWidget);
+    expect(
+      find.textContaining('Session lost'),
+      findsAtLeastNWidgets(1),
+    );
+    // The stamp names minutes, not a bare "stale".
+    expect(find.textContaining('min ago'), findsOneWidget);
+    // The readings are still there — dimmed, not deleted.
+    expect(find.textContaining('LTE'), findsWidgets);
+  });
 }
 
 /// USSD client double: no network, canned menu + reply answers.
@@ -1149,6 +1343,8 @@ class _FakeUssdClient extends ZteClient {
     '1',
     '16',
     '',
+    // Raw capture: the cable-eaten line breaks the sanitizer repairs.
+    '1 My Airtel Offer\r2 Data Plans\r3 4GB @ N100',
   );
 
   @override
@@ -1163,6 +1359,20 @@ class _FakeUssdClient extends ZteClient {
     Duration pollEvery = const Duration(seconds: 1),
     int maxPolls = 45,
   }) async => menuOpen
-      ? const UssdResult(true, '9 8GB @N250\n* Next', '1', '16', '')
-      : const UssdResult(true, 'Purchase successful.', '', '16', '');
+      ? const UssdResult(
+          true,
+          '9 8GB @N250\n* Next',
+          '1',
+          '16',
+          '',
+          '9 8GB @N250\n* Next',
+        )
+      : const UssdResult(
+          true,
+          'Purchase successful.',
+          '',
+          '16',
+          '',
+          'Purchase successful.',
+        );
 }

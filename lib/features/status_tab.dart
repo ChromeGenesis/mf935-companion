@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'status_cards.dart';
+import '../core/theme.dart';
 import 'speed_test_card.dart';
+import '../core/session_recovery.dart' as recovery;
 import '../core/signal_locator.dart';
 import '../core/zte_client.dart';
 
@@ -20,6 +22,12 @@ class StatusTab extends StatefulWidget {
   final ZteClient client;
   final bool connected;
   final Map<String, dynamic> status;
+
+  /// When [status] was last polled. With the session down the numbers
+  /// stay on screen (they are still true) but they must be labelled
+  /// with their age — see [recovery.staleBannerText].
+  final DateTime? statusAt;
+
   final void Function(String) log;
   final Future<void> Function(String title, String body) notify;
   final Future<void> Function() onRefreshNow;
@@ -54,6 +62,7 @@ class StatusTab extends StatefulWidget {
     required this.client,
     required this.connected,
     required this.status,
+    this.statusAt,
     required this.log,
     required this.notify,
     required this.onRefreshNow,
@@ -255,7 +264,14 @@ class StatusTabState extends State<StatusTab> {
     final liveDown = double.tryParse('${s['realtime_rx_thrpt'] ?? ''}');
     final liveUp = double.tryParse('${s['realtime_tx_thrpt'] ?? ''}');
 
-    return Column(
+    // Session lost but the last poll is still on screen: say so, and say
+    // how old it is. Dimming the numbers is a second cue — the eye reads
+    // "greyed" before it reads the sentence.
+    final staleText = recovery.staleBannerText(
+      sessionLive: widget.connected,
+      lastAt: widget.statusAt,
+    );
+    final live = Column(
       children: [
         StatusHero(
           highlighted: widget.connected,
@@ -316,6 +332,54 @@ class StatusTabState extends State<StatusTab> {
           log: widget.log,
         ),
       ],
+    );
+
+    if (staleText.isEmpty) return live;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        StaleStatusBanner(text: staleText),
+        const SizedBox(height: 10),
+        Opacity(opacity: 0.55, child: live),
+      ],
+    );
+  }
+}
+
+/// Amber banner naming the age of the numbers below it. Rendered only
+/// while the session is down and a previous poll is still on screen —
+/// see [recovery.staleBannerText] for the wording rules.
+class StaleStatusBanner extends StatelessWidget {
+  final String text;
+  const StaleStatusBanner({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return Container(
+      key: const Key('status-stale-banner'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: c.accent.withAlpha(26),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.accent.withAlpha(120)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.history_toggle_off, size: 16, color: c.accentText),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
