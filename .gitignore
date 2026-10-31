@@ -48,3 +48,6 @@ app.*.map.json
 # Local machine state: session cookies + SDK path (never commit)
 /.cookies/
 android/local.properties
+
+# CI-downloaded APK artifacts (kept out of git; built by .github/workflows)
+/apk/

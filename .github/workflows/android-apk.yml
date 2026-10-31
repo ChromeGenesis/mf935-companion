@@ -1,0 +1,46 @@
+name: Android APK
+
+# Builds the release APK in the cloud so a local Gradle/Maven outage
+# (or Windows symlink/Developer-Mode issues) never blocks a build.
+# Artifacts expire in 6 days — always under a week.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'todo.md'
+      - '.metadata'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Test (must stay green)
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact (6-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mf935-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 6
