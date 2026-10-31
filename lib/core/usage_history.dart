@@ -25,6 +25,18 @@ const _months = [
 /// 'Sep 28' — short locale-independent date for captions.
 String shortDate(DateTime d) => '${_months[d.month - 1]} ${d.day}';
 
+/// 'Oct' — three-letter month for range labels.
+String monthAbbr(DateTime d) => _months[d.month - 1];
+
+/// First day of [d]'s calendar month — the billing-window anchor. The
+/// carrier counter is monthly, so the live cycle spans its calendar
+/// month even before any sample exists.
+DateTime monthStart(DateTime d) => DateTime(d.year, d.month);
+
+DateTime monthEnd(DateTime d) => DateTime(d.year, d.month, daysInMonthOf(d));
+
+int daysInMonthOf(DateTime d) => DateTime(d.year, d.month + 1, 0).day;
+
 /// One observed billing cycle. [usedMb] is the peak cumulative total
 /// seen (counters only grow within a cycle, so the peak is the month's
 /// usage); [daily] maps `yyyy-MM-dd` to the last cumulative value seen

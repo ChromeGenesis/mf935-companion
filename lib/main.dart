@@ -66,7 +66,7 @@ Future<void> main() async {
     );
   }
 
-  // Restore the saved theme mode before the first frame (system | light | dark).
+  // Restore the saved theme mode + accent before the first frame.
   final prefs = await SharedPreferences.getInstance();
   final saved = prefs.getString('theme_mode') ?? 'system';
   final initial = switch (saved) {
@@ -74,19 +74,34 @@ Future<void> main() async {
     'dark' => ThemeMode.dark,
     _ => ThemeMode.system,
   };
+  final initialAccent = ZteAccent.values.firstWhere(
+    (a) => a.name == prefs.getString('theme_accent'),
+    orElse: () => ZteAccent.amber,
+  );
 
-  runApp(ZteApp(initialMode: initial));
+  runApp(ZteApp(initialMode: initial, initialAccent: initialAccent));
 }
 
 class ZteApp extends StatefulWidget {
   final ThemeMode initialMode;
+  final ZteAccent initialAccent;
 
-  const ZteApp({super.key, required this.initialMode});
+  const ZteApp({
+    super.key,
+    required this.initialMode,
+    this.initialAccent = ZteAccent.amber,
+  });
 
   /// Change the app-wide theme and persist the choice.
   static void setThemeMode(BuildContext context, ThemeMode mode) {
     final state = context.findAncestorStateOfType<_ZteAppState>();
     state?._setMode(mode);
+  }
+
+  /// Change the app-wide accent palette and persist the choice.
+  static void setAccent(BuildContext context, ZteAccent accent) {
+    final state = context.findAncestorStateOfType<_ZteAppState>();
+    state?._setAccent(accent);
   }
 
   /// Current ThemeMode (for header toggle chips), or null when the
@@ -96,12 +111,20 @@ class ZteApp extends StatefulWidget {
     return state?._mode;
   }
 
+  /// Current accent palette (for the switcher's selected dot), or null
+  /// when not mounted below [ZteApp].
+  static ZteAccent? maybeAccent(BuildContext context) {
+    final state = context.findAncestorStateOfType<_ZteAppState>();
+    return state?._accent;
+  }
+
   @override
   State<ZteApp> createState() => _ZteAppState();
 }
 
 class _ZteAppState extends State<ZteApp> {
   late ThemeMode _mode = widget.initialMode;
+  late ZteAccent _accent = widget.initialAccent;
 
   void _setMode(ThemeMode mode) {
     setState(() => _mode = mode);
@@ -117,12 +140,19 @@ class _ZteAppState extends State<ZteApp> {
     );
   }
 
+  void _setAccent(ZteAccent accent) {
+    setState(() => _accent = accent);
+    SharedPreferences.getInstance().then(
+      (p) => p.setString('theme_accent', accent.name),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MiFi Companion',
-      theme: buildZteTheme(brightness: Brightness.light),
-      darkTheme: buildZteTheme(brightness: Brightness.dark),
+      theme: buildZteTheme(brightness: Brightness.light, accent: _accent),
+      darkTheme: buildZteTheme(brightness: Brightness.dark, accent: _accent),
       themeMode: _mode,
       debugShowCheckedModeBanner: false,
       home: const DashboardPage(),

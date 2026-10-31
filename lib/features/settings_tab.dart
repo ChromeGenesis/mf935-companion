@@ -1,11 +1,12 @@
 library;
 
-/// Settings tab (SSOT): the device-management surface. Houses the
-/// Connection panel, Appearance (theme), Diagnostics log, Device
-/// actions (reboot/shutdown) and Power management — relocated off the
-/// Status tab so the dashboard stays read-only + glanceable. Also
-/// archives the verbose raw USSD balance replies that used to clutter
-/// the primary screen.
+/// Settings tab (SSOT): the device-management surface, decluttered into
+/// collapsible glass sections. Connection + Appearance stay on the
+/// surface (the things people actually touch); Power & device,
+/// Monitoring, Reports and Advanced fold away behind quiet headers —
+/// every card still exists, nothing was removed. Also archives the
+/// verbose raw USSD balance replies that used to clutter the primary
+/// screen, and hosts the theme mode + accent color switchers.
 import 'package:flutter/material.dart';
 
 import '../core/capability.dart';
@@ -273,7 +274,8 @@ class _SettingsTabState extends State<SettingsTab> {
           final deviceActions = DeviceActionsCard(
             connected: widget.connected,
             onAction: _devicePowerAction,
-          );          final power = PowerCard(
+          );
+          final power = PowerCard(
             powerSave: _powerSave,
             wifiCoverage: _wifiCoverage,
             wifiSleepMinutes: _wifiSleepMinutes,
@@ -315,6 +317,34 @@ class _SettingsTabState extends State<SettingsTab> {
             onApiChanged: widget.onApiChanged,
           );
 
+          // Two surfaces stay on the surface (Connection, Appearance,
+          // Device actions); everything else folds into four quiet
+          // sections so the page reads calm while keeping every card.
+          Widget section(String title, IconData icon, List<Widget> children) =>
+              _SettingsSection(title: title, icon: icon, children: children);
+
+          final sections = Column(
+            children: [
+              section('Power & device', Icons.router_outlined, [
+                power,
+                intel,
+              ]),
+              section('Monitoring', Icons.notifications_outlined, [
+                const SmartAlertsCard(),
+                monitors,
+              ]),
+              section('Reports', Icons.description_outlined, [
+                incident,
+                timeline,
+              ]),
+              section('Advanced', Icons.tune, [
+                advanced,
+                rawLog,
+                SizedBox(height: 260, child: log),
+              ]),
+            ],
+          );
+
           if (wide) {
             return Column(
               children: [
@@ -326,40 +356,16 @@ class _SettingsTabState extends State<SettingsTab> {
                     Expanded(
                       child: Column(
                         children: [
+                          appearance,
+                          const SizedBox(height: 10),
                           deviceActions,
-                          const SizedBox(height: 10),
-                          power,
-                          const SizedBox(height: 10),
-                          const SmartAlertsCard(),
                         ],
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
-                SizedBox(width: double.infinity, child: intel),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, child: monitors),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, child: incident),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, child: advanced),
-                const SizedBox(height: 10),
-                const SizedBox(
-                  width: double.infinity,
-                  child: appearance,
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: timeline),
-                    const SizedBox(width: 10),
-                    Expanded(child: SizedBox(height: 280, child: log)),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, child: rawLog),
+                sections,
               ],
             );
           }
@@ -371,26 +377,108 @@ class _SettingsTabState extends State<SettingsTab> {
               const SizedBox(height: 10),
               deviceActions,
               const SizedBox(height: 10),
-              power,
-              const SizedBox(height: 10),
-              const SmartAlertsCard(),
-              const SizedBox(height: 10),
-              intel,
-              const SizedBox(height: 10),
-              monitors,
-              const SizedBox(height: 10),
-              incident,
-              const SizedBox(height: 10),
-              advanced,
-              const SizedBox(height: 10),
-              timeline,
-              const SizedBox(height: 10),
-              rawLog,
-              const SizedBox(height: 10),
-              SizedBox(height: 220, child: log),
+              sections,
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// A collapsible glass group. Header: icon chip + title + rotating
+/// chevron; content folds away with an eased cross-fade so the page
+/// opens calm and expands on demand.
+class _SettingsSection extends StatefulWidget {
+  final String title;
+  final IconData icon;
+  final List<Widget> children;
+
+  const _SettingsSection({
+    required this.title,
+    required this.icon,
+    required this.children,
+  });
+
+  @override
+  State<_SettingsSection> createState() => _SettingsSectionState();
+}
+
+class _SettingsSectionState extends State<_SettingsSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: c.accent.withAlpha(26),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: c.accent.withAlpha(80)),
+                    ),
+                    child: Icon(widget.icon, size: 16, color: c.accentText),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      widget.title,
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: _expanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 160),
+                    child: Icon(
+                      Icons.expand_more,
+                      size: 19,
+                      color: c.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedCrossFade(
+            duration: const Duration(milliseconds: 180),
+            sizeCurve: Curves.easeOut,
+            crossFadeState: _expanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            firstChild: const SizedBox(width: double.infinity, height: 0),
+            secondChild: Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < widget.children.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 10),
+                    widget.children[i],
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -461,10 +549,9 @@ class _BalanceRawLog extends StatelessWidget {
   }
 }
 
-/// Appearance card: Light / Dark / Auto theme switcher. Relocated
-/// here from the top header, where the chip competed with the system
-/// status-bar tap area on phones. Defaults to Auto (follows system).
-/// The switcher drops below the label on narrow phones so the
+/// Appearance card: Light / Dark / Auto theme switcher plus the accent
+/// palette picker. Both choices persist app-wide (see [ZteApp]). The
+/// mode switcher drops below the label on narrow phones so the
 /// "Appearance" title never wraps.
 class _AppearanceCard extends StatelessWidget {
   const _AppearanceCard();
@@ -474,6 +561,7 @@ class _AppearanceCard extends StatelessWidget {
     final c = context.zc;
     // No saved choice yet → Auto. Fresh installs follow the system.
     final mode = ZteApp.maybeMode(context) ?? ThemeMode.system;
+    final accent = ZteApp.maybeAccent(context) ?? ZteAccent.amber;
     final label = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -528,29 +616,107 @@ class _AppearanceCard extends StatelessWidget {
     );
     return GlassCard(
       padding: const EdgeInsets.all(14),
-      child: LayoutBuilder(
-        builder: (ctx, cons) {
-          // Narrow (<400px): stack the switcher full-width underneath
-          // so it never squeezes the title onto two lines.
-          if (cons.maxWidth < 400) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                label,
-                const SizedBox(height: 10),
-                _ThemeSwitcher(selected: mode),
-              ],
-            );
-          }
-          return Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (ctx, cons) {
+              // Narrow (<400px): stack the switcher full-width underneath
+              // so it never squeezes the title onto two lines.
+              if (cons.maxWidth < 400) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    label,
+                    const SizedBox(height: 10),
+                    _ThemeSwitcher(selected: mode),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: label),
+                  const SizedBox(width: 8),
+                  Expanded(child: _ThemeSwitcher(selected: mode)),
+                ],
+              );
+            },
+          ),
+          Divider(color: c.borderSubtle, height: 22),
+          Row(
             children: [
-              Expanded(child: label),
-              const SizedBox(width: 8),
-              Expanded(child: _ThemeSwitcher(selected: mode)),
+              Expanded(
+                child: Text(
+                  'Accent color',
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                accent.label,
+                style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
-          );
-        },
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: [
+              for (final a in ZteAccent.values)
+                _AccentDot(accent: a, selected: a == accent),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One accent swatch. Selected = primary-colored ring + tick.
+class _AccentDot extends StatelessWidget {
+  final ZteAccent accent;
+  final bool selected;
+
+  const _AccentDot({required this.accent, required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return GestureDetector(
+      onTap: () => ZteApp.setAccent(context, accent),
+      child: Tooltip(
+        message: accent.label,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: accent.color,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected ? c.textPrimary : c.borderSubtle,
+              width: selected ? 2.5 : 1,
+            ),
+          ),
+          child: selected
+              ? Icon(
+                  Icons.check,
+                  size: 15,
+                  color: accent.color.computeLuminance() > 0.55
+                      ? Colors.black
+                      : Colors.white,
+                )
+              : null,
+        ),
       ),
     );
   }

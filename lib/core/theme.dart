@@ -145,14 +145,84 @@ class ZSystemUI {
   }
 }
 
+/// Accent palette choices for the app chrome (Settings → Appearance).
+/// Amber is the original Rhema look; the rest are tasteful alternates
+/// re-derived per brightness so contrast stays readable in both themes.
+enum ZteAccent { amber, indigo, emerald, rose, sky }
+
+extension ZteAccentX on ZteAccent {
+  String get label => switch (this) {
+    ZteAccent.amber => 'Amber',
+    ZteAccent.indigo => 'Indigo',
+    ZteAccent.emerald => 'Emerald',
+    ZteAccent.rose => 'Rose',
+    ZteAccent.sky => 'Sky',
+  };
+
+  Color get color => switch (this) {
+    ZteAccent.amber => const Color(0xFFF59E0B),
+    ZteAccent.indigo => const Color(0xFF6366F1),
+    ZteAccent.emerald => const Color(0xFF10B981),
+    ZteAccent.rose => const Color(0xFFF43F5E),
+    ZteAccent.sky => const Color(0xFF0EA5E9),
+  };
+}
+
+/// Rebuild [base] with an accent swap: accent + glow + text triplet
+/// move together, [onAccent] follows contrast, everything else
+/// (scaffold, orbs, live/danger) stays put so the ambient look survives.
+ZteColors _withAccent(ZteColors base, Color accent) {
+  final dark = base.brightness == Brightness.dark;
+  final accentText = dark
+      ? Color.lerp(accent, Colors.white, 0.28)!
+      : Color.lerp(accent, Colors.black, 0.32)!;
+  return ZteColors(
+    scaffold: base.scaffold,
+    surface: base.surface,
+    surfaceLifted: base.surfaceLifted,
+    border: base.border,
+    borderSubtle: base.borderSubtle,
+    accent: accent,
+    accentGlow: accent.withAlpha(dark ? 0x50 : 0x40),
+    accentText: accentText,
+    orbSecondary: base.orbSecondary,
+    live: base.live,
+    danger: base.danger,
+    textPrimary: base.textPrimary,
+    textSecondary: base.textSecondary,
+    textMuted: base.textMuted,
+    inputBg: base.inputBg,
+    glass: base.glass,
+    glassHighlight: base.glassHighlight,
+    chip: base.chip,
+    chipBorder: base.chipBorder,
+    onAccent: accent.computeLuminance() > 0.55
+        ? const Color(0xFF0A0A0A)
+        : Colors.white,
+    brightness: base.brightness,
+  );
+}
+
 /// Typography shared by both themes: Outfit everywhere.
 TextTheme _zteTextTheme(Brightness b) => GoogleFonts.outfitTextTheme(
       (b == Brightness.dark ? ThemeData.dark() : ThemeData.light()).textTheme,
     );
 
-/// Build the app theme for either brightness.
-ThemeData buildZteTheme({Brightness brightness = Brightness.dark}) {
-  final c = brightness == Brightness.dark ? ZteColors.dark : ZteColors.light;
+/// Build the app theme for either brightness. [accent] recolors the
+/// accent family; amber keeps the hand-tuned default palettes exactly
+/// as designed (per-brightness variants), every other choice is derived.
+ThemeData buildZteTheme({
+  Brightness brightness = Brightness.dark,
+  ZteAccent accent = ZteAccent.amber,
+}) {
+  var c = brightness == Brightness.dark ? ZteColors.dark : ZteColors.light;
+  if (accent != ZteAccent.amber) {
+    final raw = accent.color;
+    final tuned = brightness == Brightness.dark
+        ? raw
+        : Color.lerp(raw, Colors.black, 0.12)!;
+    c = _withAccent(c, tuned);
+  }
   final text = _zteTextTheme(brightness);
   final isDark = brightness == Brightness.dark;
   return ThemeData(

@@ -329,8 +329,6 @@ class _UsagePageState extends State<UsagePage> {
                                   _heroCard(view, alertMb),
                                   const SizedBox(height: 12),
                                   _chartCard(view),
-                                  const SizedBox(height: 12),
-                                  _breakdownCard(view),
                                   const SizedBox(height: 6),
                                   Text(
                                     'Measured by the MiFi monthly counter. '
@@ -366,14 +364,25 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  // ── Cycle selector pill ("Oct 3 – 31 ▾") ──────────────────────────
+  // ── Cycle selector pill ("Oct 1 – 31 ▾") ──────────────────────────
+
+  /// 'Oct 3 – 31' within one month, 'Sep 28 – Oct 27' across months.
+  String _rangeLabel(DateTime a, DateTime b) {
+    if (a.year == b.year && a.month == b.month) {
+      return '${monthAbbr(a)} ${a.day} – ${b.day}';
+    }
+    return '${shortDate(a)} – ${shortDate(b)}';
+  }
 
   Widget _cyclePill(CycleUsage? live, List<CycleUsage> past) {
     final c = context.zc;
     String range(int index) {
       final cy = index == 0 ? live! : past[index - 1];
-      final end = index == 0 ? DateTime.now() : cy.lastAt;
-      return '${shortDate(cy.startedAt)} – ${shortDate(end)}';
+      // The live cycle spans its calendar month even before the first
+      // sample exists — "Oct 31 – Oct 31" on day one reads as broken.
+      final start = index == 0 ? monthStart(cy.startedAt) : cy.startedAt;
+      final end = index == 0 ? monthEnd(cy.startedAt) : cy.lastAt;
+      return _rangeLabel(start, end);
     }
 
     // A cleared ledger can leave the selection pointing at "live" while
@@ -412,7 +421,7 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  // ── Hero: big "used" number ───────────────────────────────────────
+  // ── Hero: the screenshot card ─────────────────────────────────────
 
   Widget _heroCard(CycleUsage? view, double? alertMb) {
     final c = context.zc;
@@ -433,19 +442,22 @@ class _UsagePageState extends State<UsagePage> {
     final isLive = _selected == 0;
     final showAlert = isLive && alertMb != null && alertMb > 0;
     final frac = showAlert ? (view.usedMb / alertMb).clamp(0.0, 1.0) : null;
-    final overLine = showAlert && view.usedMb >= alertMb;
-    final lineColor = overLine || (frac ?? 0) >= 0.9 ? c.danger : c.accent;
+    final ringColor = frac != null && frac >= 0.9 ? c.danger : c.accentText;
+    final range = isLive
+        ? _rangeLabel(monthStart(view.startedAt), monthEnd(view.startedAt))
+        : _rangeLabel(view.startedAt, view.lastAt);
 
     // One muted caption carries the numbers that only mean something
     // once the cycle has a couple of days behind it.
     final caption = StringBuffer();
     if (isLive) {
-      caption.write('cycle since ${shortDate(view.startedAt)} · ');
       caption.write('sampled ${_ago(view.lastAt)}');
     } else {
-      caption.write('ended ${shortDate(view.lastAt)} · ');
-      caption.write('${view.daysObserved} day${view.daysObserved == 1 ? '' : 's'} '
-          'with data');
+      caption.write(
+        'ended ${shortDate(view.lastAt)} · '
+        '${view.daysObserved} day${view.daysObserved == 1 ? '' : 's'} '
+        'with data',
+      );
     }
     if (view.daysObserved >= 2) {
       caption.write(
@@ -454,79 +466,229 @@ class _UsagePageState extends State<UsagePage> {
       );
     }
 
+    final maxSide = view.rxMb > view.txMb ? view.rxMb : view.txMb;
+    final showSplit = view.rxMb > 0 || view.txMb > 0;
+
     return GlassCard(
       highlighted: widget.connected && isLive,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  ZteClient.formatDataVolume(view.usedMb),
+      padding: EdgeInsets.zero,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              c.accent.withAlpha(isLive ? 46 : 22),
+              c.accent.withAlpha(0),
+            ],
+          ),
+        ),
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  isLive ? 'THIS CYCLE' : 'ARCHIVED',
                   style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 40,
-                    height: 1.0,
+                    color: c.textMuted,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w800,
+                    letterSpacing: 1.6,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  range,
+                  style: TextStyle(
+                    color: c.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'used',
-                style: TextStyle(
-                  color: c.textMuted,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              if (showAlert)
-                Text(
-                  '${(frac! * 100).clamp(0, 999).toStringAsFixed(0)}% '
-                  'of ${ZteClient.formatDataVolume(alertMb)}',
-                  style: TextStyle(
-                    color: overLine || frac >= 0.9 ? c.danger : c.textMuted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              ZteClient.formatDataVolume(view.usedMb),
+                              style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 46,
+                                height: 1.0,
+                                fontWeight: FontWeight.w800,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'used',
+                            style: TextStyle(
+                              color: c.textMuted,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        caption.toString(),
+                        style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-          if (showAlert) ...[
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: SizedBox(
-                height: 6,
-                child: Stack(
-                  children: [
-                    Container(color: c.textMuted.withAlpha(36)),
-                    FractionallySizedBox(
-                      alignment: Alignment.centerLeft,
-                      widthFactor: frac!.clamp(0.01, 1.0),
-                      child: Container(color: lineColor),
+                const SizedBox(width: 12),
+                if (showAlert)
+                  _MiniRing(
+                    frac: frac!,
+                    color: ringColor,
+                    track: c.textMuted.withAlpha(46),
+                    capMb: alertMb,
+                  )
+                else if (isLive)
+                  GestureDetector(
+                    onTap: _editAlert,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: c.accent.withAlpha(26),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: c.accent.withAlpha(90)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.notifications_active_outlined,
+                            size: 13,
+                            color: c.accentText,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Set alert line',
+                            style: TextStyle(
+                              color: c.accentText,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+              ],
+            ),
+            if (showSplit) ...[
+              const SizedBox(height: 14),
+              Divider(color: c.borderSubtle, height: 1),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _splitMini(
+                      Icons.south,
+                      'Downloaded',
+                      view.rxMb,
+                      maxSide,
+                      c.live,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _splitMini(
+                      Icons.north,
+                      'Uploaded',
+                      view.txMb,
+                      maxSide,
+                      c.accent,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One down/up mini inside the hero: value, share-of-side bar, label.
+  Widget _splitMini(
+    IconData icon,
+    String label,
+    double mb,
+    double maxSide,
+    Color color,
+  ) {
+    final c = context.zc;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 5),
+            Text(
+              ZteClient.formatDataVolume(mb),
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ],
-          const SizedBox(height: 10),
-          Text(
-            caption.toString(),
-            style: TextStyle(color: c.textMuted, fontSize: 11.5),
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: SizedBox(
+            height: 4,
+            child: Stack(
+              children: [
+                Container(color: c.textMuted.withAlpha(34)),
+                FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: (mb / maxSide).clamp(0.02, 1.0),
+                  child: Container(color: color),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(color: c.textMuted, fontSize: 10.5),
+        ),
+      ],
     );
   }
 
@@ -534,148 +696,73 @@ class _UsagePageState extends State<UsagePage> {
 
   Widget _chartCard(CycleUsage? view) {
     final c = context.zc;
+    if (view == null) return const SizedBox.shrink();
     final points = <(DateTime, double)>[];
-    if (view != null) {
-      final days = view.daily.keys.toList()..sort();
-      for (final k in days) {
-        final d = DateTime.parse(k);
-        if (points.isNotEmpty && d.isBefore(points.first.$1)) continue;
-        points.add((d, view.daily[k] ?? 0));
-      }
+    final days = view.daily.keys.toList()..sort();
+    for (final k in days) {
+      final d = DateTime.parse(k);
+      if (points.isNotEmpty && d.isBefore(points.first.$1)) continue;
+      points.add((d, view.daily[k] ?? 0));
     }
-    final enough = points.length >= 2;
+    if (points.isEmpty) return const SizedBox.shrink();
+    final isLive = _selected == 0;
+    // The x-domain is the billing window, not the sampled days — the
+    // curve sits proportionally in its month from day one, One UI
+    // style. The live cycle also gets a dashed month-end projection.
+    final domainStart = isLive ? monthStart(view.startedAt) : view.startedAt;
+    final domainEnd = isLive ? monthEnd(view.startedAt) : view.lastAt;
     return GlassCard(
       padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
-      child: enough
-          ? LayoutBuilder(
-              builder: (ctx, cons) {
-                final first = points.first.$1;
-                final last = points.last.$1;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      height: 190,
-                      child: CustomPaint(
-                        painter: _CumulativePainter(
-                          points: points,
-                          line: c.accent,
-                          fillTop: c.accent.withAlpha(115),
-                          fillBottom: c.accent.withAlpha(12),
-                          grid: c.textMuted.withAlpha(90),
-                          label: c.textMuted,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 34),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            shortDate(first),
-                            style: TextStyle(
-                              color: c.textMuted,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                          Text(
-                            shortDate(last),
-                            style: TextStyle(
-                              color: c.textMuted,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
-            )
-          : Padding(
-              padding: const EdgeInsets.symmetric(vertical: 22),
-              child: EmptyState(
-                icon: Icons.show_chart,
-                title: 'The curve appears after two days',
-                subtitle: 'Cumulative usage is plotted as the poller '
-                    'samples the counter across the cycle.',
-              ),
-            ),
-    );
-  }
-
-  // ── Down/up breakdown list ────────────────────────────────────────
-
-  Widget _breakdownCard(CycleUsage? view) {
-    final c = context.zc;
-    if (view == null || (view.rxMb <= 0 && view.txMb <= 0)) {
-      return const SizedBox.shrink();
-    }
-    final maxSide = view.rxMb > view.txMb ? view.rxMb : view.txMb;
-    Widget row(IconData icon, String label, double mb, Color color) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: c.textSecondary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Text(
-                ZteClient.formatDataVolume(mb),
-                style: TextStyle(
-                  color: c.textPrimary,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: SizedBox(
-              height: 5,
-              child: Stack(
-                children: [
-                  Container(color: c.textMuted.withAlpha(30)),
-                  FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: (mb / maxSide).clamp(0.02, 1.0),
-                    child: Container(color: color),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    return GlassCard(
-      padding: const EdgeInsets.all(14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          row(Icons.south, 'Downloaded', view.rxMb, c.live),
-          const SizedBox(height: 14),
-          row(Icons.north, 'Uploaded', view.txMb, c.accent),
+          SizedBox(
+            width: double.infinity,
+            height: 190,
+            child: CustomPaint(
+              painter: _CumulativePainter(
+                points: points,
+                domainStart: domainStart,
+                domainEnd: domainEnd,
+                projectedEndMb: isLive ? view.projectedMb() : null,
+                line: c.accent,
+                fillTop: c.accent.withAlpha(115),
+                fillBottom: c.accent.withAlpha(12),
+                grid: c.textMuted.withAlpha(90),
+                label: c.textMuted,
+                dotRing: c.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(right: 34),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  shortDate(domainStart),
+                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.trending_flat,
+                      size: 13,
+                      color: c.textMuted.withAlpha(150),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      shortDate(domainEnd),
+                      style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -899,24 +986,35 @@ class _MonthRow extends StatelessWidget {
   }
 }
 
-/// Cumulative area chart: usage climbs left → right across the cycle,
-/// gridlines at 0/50/100% of the cycle's peak with % labels on the
-/// right edge (One UI data-usage idiom), amber gradient fill.
+/// Cumulative area chart: usage climbs left → right across the
+/// billing window (not the sampled days, so the curve sits
+/// proportionally in its month from day one). Gridlines at 0/50/100%
+/// of the cycle peak with % labels on the right edge; the newest real
+/// sample gets a dot; the live cycle extends a dashed month-end
+/// projection at the observed daily average.
 class _CumulativePainter extends CustomPainter {
   final List<(DateTime, double)> points;
+  final DateTime domainStart;
+  final DateTime domainEnd;
+  final double? projectedEndMb;
   final Color line;
   final Color fillTop;
   final Color fillBottom;
   final Color grid;
   final Color label;
+  final Color dotRing;
 
   _CumulativePainter({
     required this.points,
+    required this.domainStart,
+    required this.domainEnd,
+    required this.projectedEndMb,
     required this.line,
     required this.fillTop,
     required this.fillBottom,
     required this.grid,
     required this.label,
+    required this.dotRing,
   });
 
   static const _left = 4.0;
@@ -929,17 +1027,18 @@ class _CumulativePainter extends CustomPainter {
     if (points.isEmpty) return;
     final chartW = size.width - _left - _right;
     final chartH = size.height - _top - _bottom;
-    final spanDays = points.last.$1.difference(points.first.$1).inDays;
-    final span = spanDays < 1 ? 1 : spanDays;
-    final maxMb = points.fold<double>(
-      0.001,
-      (m, p) => p.$2 > m ? p.$2 : m,
-    );
+    var spanDays = domainEnd.difference(domainStart).inDays;
+    if (spanDays < 1) spanDays = 1;
+    var maxMb = points.fold<double>(0.001, (m, p) => p.$2 > m ? p.$2 : m);
+    final projected = projectedEndMb;
+    if (projected != null && projected > maxMb) maxMb = projected;
 
-    Offset xy(int i) {
-      final day = points[i].$1.difference(points.first.$1).inDays;
-      final x = _left + (day / span) * chartW;
-      final y = _top + (1 - points[i].$2 / maxMb) * chartH;
+    Offset xy(DateTime d, double mb) {
+      var off = d.difference(domainStart).inDays;
+      if (off < 0) off = 0;
+      if (off > spanDays) off = spanDays;
+      final x = _left + (off / spanDays) * chartW;
+      final y = _top + (1 - mb / maxMb) * chartH;
       return Offset(x, y);
     }
 
@@ -957,13 +1056,16 @@ class _CumulativePainter extends CustomPainter {
       );
     }
 
-    final path = Path()..moveTo(xy(0).dx, xy(0).dy);
+    final first = xy(points[0].$1, points[0].$2);
+    final path = Path()..moveTo(first.dx, first.dy);
     for (var i = 1; i < points.length; i++) {
-      path.lineTo(xy(i).dx, xy(i).dy);
+      final p = xy(points[i].$1, points[i].$2);
+      path.lineTo(p.dx, p.dy);
     }
+    final last = xy(points.last.$1, points.last.$2);
     final area = Path.from(path)
-      ..lineTo(xy(points.length - 1).dx, _top + chartH)
-      ..lineTo(xy(0).dx, _top + chartH)
+      ..lineTo(last.dx, _top + chartH)
+      ..lineTo(first.dx, _top + chartH)
       ..close();
     canvas.drawPath(
       area,
@@ -983,6 +1085,30 @@ class _CumulativePainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..color = line,
     );
+
+    // Marker on the newest real sample.
+    canvas.drawCircle(last, 4.4, Paint()..color = dotRing);
+    canvas.drawCircle(last, 2.9, Paint()..color = line);
+
+    // Dashed projection to the end of the billing window.
+    if (projected != null) {
+      final end = xy(domainEnd, projected);
+      final dashPath = Path()
+        ..moveTo(last.dx, last.dy)
+        ..lineTo(end.dx, end.dy);
+      final dash = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..color = line.withAlpha(170);
+      for (final m in dashPath.computeMetrics()) {
+        var dist = 0.0;
+        while (dist < m.length) {
+          final next = dist + 5 > m.length ? m.length : dist + 5;
+          canvas.drawPath(m.extractPath(dist, next), dash);
+          dist += 9; // 5 on, 4 off
+        }
+      }
+    }
   }
 
   void _label(Canvas canvas, String text, Offset at) {
@@ -999,6 +1125,112 @@ class _CumulativePainter extends CustomPainter {
   @override
   bool shouldRepaint(_CumulativePainter old) =>
       old.points.length != points.length ||
+      old.projectedEndMb != projectedEndMb ||
+      old.domainEnd != domainEnd ||
       old.line != line ||
       old.grid != grid;
+}
+
+/// Small alert-line ring in the hero: % of the line inside, amber (or
+/// red near the line) sweep around.
+class _MiniRing extends StatelessWidget {
+  final double frac;
+  final Color color;
+  final Color track;
+  final double capMb;
+
+  const _MiniRing({
+    required this.frac,
+    required this.color,
+    required this.track,
+    required this.capMb,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (frac * 100).clamp(0, 999).toStringAsFixed(0);
+    return Tooltip(
+      message: '$pct% of ${ZteClient.formatDataVolume(capMb)} alert line',
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(end: frac.clamp(0.0, 1.0)),
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOutCubic,
+        builder: (ctx, sweep, _) => SizedBox(
+          width: 68,
+          height: 68,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CustomPaint(
+                size: const Size(68, 68),
+                painter: _MiniRingPainter(
+                  sweep: sweep,
+                  color: color,
+                  track: track,
+                ),
+              ),
+              Text(
+                '$pct%',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniRingPainter extends CustomPainter {
+  final double sweep;
+  final Color color;
+  final Color track;
+
+  _MiniRingPainter({
+    required this.sweep,
+    required this.color,
+    required this.track,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 6.0;
+    final rect = Rect.fromLTWH(
+      stroke / 2 + 1,
+      stroke / 2 + 1,
+      size.width - stroke - 2,
+      size.height - stroke - 2,
+    );
+    canvas.drawArc(
+      rect,
+      0,
+      2 * 3.141592653589793,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..color = track,
+    );
+    if (sweep <= 0) return;
+    canvas.drawArc(
+      rect,
+      -3.141592653589793 / 2,
+      2 * 3.141592653589793 * sweep,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_MiniRingPainter old) =>
+      old.sweep != sweep || old.color != color || old.track != track;
 }

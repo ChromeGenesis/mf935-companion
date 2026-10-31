@@ -37,6 +37,9 @@ without the browser.
   incident reports
 - **Alerts** — low/full battery, no-signal + recovery, new SMS, inbox nearly
   full, data usage, billing-month rollover, bundle expiry, unreachable modem
+- **Settings** — collapsible sections (connection, appearance, power &
+  device, monitoring, reports, advanced) with a light/dark/auto theme
+  switcher plus an accent color picker, all persisted
 
 ## Run
 
@@ -88,7 +91,7 @@ lib/
     ussd_tab.dart          dialer, menus, history, shortcuts
     usage_page.dart        usage page: cycle picker, cumulative chart,
                            down/up breakdown, archived months
-    settings_tab.dart      connection, power, alerts, timeline, diagnostics
+    settings_tab.dart      collapsible sections + theme mode + accent picker
     scout_card.dart        Network Scout session + ranked results
     internet_check_card.dart  data-path probe card
     timeline_card.dart     filterable connection timeline

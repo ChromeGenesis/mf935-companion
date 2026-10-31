@@ -261,8 +261,8 @@ void main() {
         },
       ),
       past: [
-        cycle(id: '2026-09', usedMb: 2048, lastAt: DateTime(2026, 9, 30, 9)),
-        cycle(id: '2026-08', usedMb: 3072, lastAt: DateTime(2026, 8, 31, 9)),
+        cycle(id: '2026-09', usedMb: 2048, startedAt: DateTime(2026, 9, 1), lastAt: DateTime(2026, 9, 30, 9)),
+        cycle(id: '2026-08', usedMb: 3072, startedAt: DateTime(2026, 8, 1), lastAt: DateTime(2026, 8, 31, 9)),
       ],
     );
 
@@ -307,16 +307,18 @@ void main() {
       // Hero: big used number + the alert-line fraction.
       expect(find.text('90 MB'), findsOneWidget);
       expect(find.text('used'), findsOneWidget);
-      expect(find.textContaining('of 40.0 GB'), findsOneWidget);
-      expect(find.textContaining('cycle since Oct 1'), findsOneWidget);
+      // Alert-line ring shows the fraction; month range on the pill
+      // and the hero overline.
+      expect(find.text('0%'), findsOneWidget);
+      expect(find.text('Oct 1 – 31'), findsWidgets);
       // Breakdown rows: down/up split.
       expect(find.text('Downloaded'), findsOneWidget);
       expect(find.text('Uploaded'), findsOneWidget);
       expect(find.text('60 MB'), findsOneWidget);
       expect(find.text('30 MB'), findsOneWidget);
-      // Chart date corners.
-      expect(find.text('Oct 4'), findsOneWidget);
-      expect(find.text('Oct 8'), findsOneWidget);
+      // Chart corners span the billing month, not the samples.
+      expect(find.text('Oct 1'), findsOneWidget);
+      expect(find.text('Oct 31'), findsOneWidget);
       // History rows for both archived months.
       expect(find.text('PREVIOUS MONTHS'), findsOneWidget);
       expect(find.text('Sep 2026'), findsOneWidget);
