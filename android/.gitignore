@@ -13,3 +13,7 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# The sideload keystore is deliberately committed (see gradle.properties)
+# so local and CI builds stay upgrade-compatible.
+!mf935-signing.keystore
