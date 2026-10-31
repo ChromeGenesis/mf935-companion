@@ -39,7 +39,7 @@ import 'sidebar.dart';
 import 'sms_tab.dart';
 import 'status_tab.dart';
 import '../core/theme.dart';
-import 'usage_tab.dart';
+import 'usage_page.dart';
 import 'ussd_tab.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -106,14 +106,14 @@ class _DashboardPageState extends State<DashboardPage>
   );
 
   /// Usage ledger feed: poller samples + manual refreshes land here;
-  /// the Data tab listens. Persisted, so months survive restarts and
+  /// the usage page listens. Persisted, so months survive restarts and
   /// counter resets are archived instead of lost.
   final ValueNotifier<UsageHistory> _usageFeed =
       ValueNotifier<UsageHistory>(const UsageHistory.empty());
 
-  /// The usage alert line (MB): ring denominator on the Data tab and
+  /// The usage alert line (MB): ring denominator on the usage page and
   /// the poller's low-data threshold — one setting, two consumers.
-  double? _usageAlertMb;
+  final ValueNotifier<double?> _usageAlert = ValueNotifier<double?>(null);
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
@@ -199,6 +199,7 @@ class _DashboardPageState extends State<DashboardPage>
     _balanceFeed.dispose();
     _signalFeed.dispose();
     _usageFeed.dispose();
+    _usageAlert.dispose();
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
@@ -233,7 +234,7 @@ class _DashboardPageState extends State<DashboardPage>
       _passCtrl.text = pw;
       _client.gatewayIp = ip;
       _usageFeed.value = usage;
-      _usageAlertMb = prefs.getDouble('usage_alert_mb');
+      _usageAlert.value = prefs.getDouble('usage_alert_mb');
     });
     _startupAuth();
   }
@@ -396,6 +397,25 @@ class _DashboardPageState extends State<DashboardPage>
         ),
       );
     }
+  }
+
+  /// Status hero metric strip / Info traffic section → the full-screen
+  /// usage page (One UI idiom — its own route, not a nav tab).
+  void _openUsagePage() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => UsagePage(
+          client: _client,
+          connected: _connected,
+          usageFeed: _usageFeed,
+          alertFeed: _usageAlert,
+          onAlertChanged: (mb) => unawaited(_setUsageAlert(mb)),
+          onSample: (t, rx, tx) => unawaited(_onUsageSample(t, rx, tx)),
+          onClearHistory: () => unawaited(_clearUsageHistory()),
+          log: _logLine,
+        ),
+      ),
+    );
   }
 
   Future<void> _doLogin() async {
@@ -581,8 +601,8 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  /// Data tab → alert line: persisted here, applied to the poller so
-  /// the usage notification and the ring share one number.
+  /// Usage page → alert line: persisted here, applied to the poller so
+  /// the usage notification and the page's cap bar share one number.
   Future<void> _setUsageAlert(double? mb) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -593,10 +613,8 @@ class _DashboardPageState extends State<DashboardPage>
       }
     } catch (_) {}
     if (!mounted) return;
-    setState(() {
-      _usageAlertMb = mb;
-      _poller?.lowDataMb = mb;
-    });
+    setState(() => _poller?.lowDataMb = mb);
+    _usageAlert.value = mb;
     _logLine(
       mb == null
           ? 'usage alert line removed'
@@ -1090,13 +1108,14 @@ class _DashboardPageState extends State<DashboardPage>
         onBalanceRaw: _logBalanceRaw,
         onProbeResult: _onProbeResult,
         onJumpTab: (i) => setState(() => _tab = i),
+        onOpenUsage: _openUsagePage,
         onUnsupported: _markUnsupported,
         ),
       ),
     );
   }
 
-  /// All six tab bodies, index-aligned with the nav. They live in an
+  /// All five tab bodies, index-aligned with the nav. They live in an
   /// [IndexedStack] so switching tabs never disposes state — scroll
   /// offsets, selections, text fields and loaded data are exactly
   /// where you left them.
@@ -1109,16 +1128,11 @@ class _DashboardPageState extends State<DashboardPage>
       log: _logLine,
       onUnsupported: _markUnsupported,
     ),
-    InfoTab(client: _client, connected: _connected, log: _logLine),
-    UsageTab(
+    InfoTab(
       client: _client,
       connected: _connected,
-      usageFeed: _usageFeed,
-      alertMb: _usageAlertMb,
-      onAlertChanged: (mb) => unawaited(_setUsageAlert(mb)),
-      onSample: (t, rx, tx) => unawaited(_onUsageSample(t, rx, tx)),
-      onClearHistory: () => unawaited(_clearUsageHistory()),
       log: _logLine,
+      onOpenUsage: _openUsagePage,
     ),
     SettingsTab(
       client: _client,

@@ -11,11 +11,15 @@ class InfoTab extends StatefulWidget {
   final bool connected;
   final void Function(String) log;
 
+  /// Open the full-screen data-usage page (from the traffic header).
+  final VoidCallback? onOpenUsage;
+
   const InfoTab({
     super.key,
     required this.client,
     required this.connected,
     required this.log,
+    this.onOpenUsage,
   });
 
   @override
@@ -333,10 +337,30 @@ class _InfoTabState extends State<InfoTab> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Header: label + refreshed stamp wrap under, so the Reset
-          // button can never be pushed off the right edge.
+          // button can never be pushed off the right edge. The label
+          // side opens the full-screen usage page (One UI idiom).
           Row(
             children: [
-              const Expanded(child: SectionLabel('Traffic statistics')),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onOpenUsage,
+                  child: Row(
+                    children: [
+                      const Expanded(child: SectionLabel('Traffic statistics')),
+                      if (widget.onOpenUsage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Icon(
+                            Icons.chevron_right,
+                            size: 16,
+                            color: c.textMuted,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
               TextButton(
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),

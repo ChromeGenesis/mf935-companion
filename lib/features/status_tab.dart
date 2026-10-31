@@ -64,6 +64,9 @@ class StatusTab extends StatefulWidget {
   /// Null-safe: tiles stay static when the shell doesn't provide it.
   final void Function(int tab)? onJumpTab;
 
+  /// Open the full-screen data-usage page (from the hero metric strip).
+  final VoidCallback? onOpenUsage;
+
   /// Report a firmware rejection once so the shell can latch it in the
   /// capability matrix instead of retrying.
   final void Function(String goformId, String reason)? onUnsupported;
@@ -84,6 +87,7 @@ class StatusTab extends StatefulWidget {
     this.onOpenSignalLocator,
     this.onBalanceRaw,
     this.onJumpTab,
+    this.onOpenUsage,
     this.onUnsupported,
   });
 
@@ -296,6 +300,7 @@ class StatusTabState extends State<StatusTab> {
           onOpenSignalLocator: widget.connected
               ? () => widget.onOpenSignalLocator?.call()
               : null,
+          onOpenMetrics: widget.connected ? widget.onOpenUsage : null,
           metrics: [
             (
               Icons.data_usage,

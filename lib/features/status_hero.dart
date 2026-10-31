@@ -23,6 +23,10 @@ class StatusHero extends StatelessWidget {
   /// Live metrics strip: month usage / live down / live up, icon +
   /// value only (caption lives in the tooltip).
   final List<(IconData, String, String)> metrics;
+
+  /// Opens the full-screen usage page — the whole strip is one tap
+  /// target (null = disabled, e.g. logged out with no data at all).
+  final VoidCallback? onOpenMetrics;
   final BalanceSection balance;
 
   /// Launch the router signal-locator tool (null = disabled, e.g.
@@ -39,6 +43,7 @@ class StatusHero extends StatelessWidget {
     required this.signal,
     required this.metrics,
     required this.balance,
+    this.onOpenMetrics,
     this.onOpenSignalLocator,
   });
 
@@ -55,14 +60,19 @@ class StatusHero extends StatelessWidget {
           final wide = cons.maxWidth > 480;
 
           // Live-metrics strip: three equal chips, icon + value only.
-          // Tooltip carries the caption; nothing can truncate.
-          final metricStrip = Row(
-            children: [
-              for (var i = 0; i < metrics.length; i++) ...[
-                if (i > 0) const SizedBox(width: 8),
-                Expanded(child: _MetricChip(m: metrics[i])),
+          // Tooltip carries the caption; nothing can truncate. The
+          // whole strip is one tap target into the usage page.
+          final metricStrip = GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onOpenMetrics,
+            child: Row(
+              children: [
+                for (var i = 0; i < metrics.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  Expanded(child: _MetricChip(m: metrics[i])),
+                ],
               ],
-            ],
+            ),
           );
 
           // Carrier one-liner: net type + gateway only.

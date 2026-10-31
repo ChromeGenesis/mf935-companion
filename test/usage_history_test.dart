@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zte_mf935_app/core/theme.dart';
 import 'package:zte_mf935_app/core/usage_history.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
-import 'package:zte_mf935_app/features/usage_tab.dart';
+import 'package:zte_mf935_app/features/usage_page.dart';
 
 CycleUsage cycle({
   String id = '2026-10',
@@ -246,7 +246,7 @@ void main() {
     });
   });
 
-  group('Usage tab', () {
+  group('Usage page', () {
     final seeded = UsageHistory(
       current: cycle(
         usedMb: 90,
@@ -266,17 +266,17 @@ void main() {
       ],
     );
 
-    Future<UsageTab> tab({
+    UsagePage page({
       required ValueNotifier<UsageHistory> feed,
-      double? alertMb = 40 * 1024,
+      ValueNotifier<double?>? alertFeed,
       void Function(double?)? onAlert,
-    }) async {
+    }) {
       SharedPreferences.setMockInitialValues({});
-      return UsageTab(
+      return UsagePage(
         client: ZteClient(),
         connected: true,
         usageFeed: feed,
-        alertMb: alertMb,
+        alertFeed: alertFeed ?? ValueNotifier<double?>(40 * 1024),
         onAlertChanged: onAlert ?? (_) {},
         onSample: (_, _, _) {},
         onClearHistory: () {},
@@ -291,59 +291,69 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildZteTheme(brightness: Brightness.dark),
-          home: Scaffold(body: child),
+          home: child,
         ),
       );
       await tester.pumpAndSettle();
     }
 
-    testWidgets('renders ring, stats, chart and history on desktop width',
-        (tester) async {
+    testWidgets('renders used number, breakdown, chart and history on '
+        'desktop width', (tester) async {
       await pump(
         tester,
-        await tab(feed: ValueNotifier<UsageHistory>(seeded)),
+        page(feed: ValueNotifier<UsageHistory>(seeded)),
         const Size(980, 1400),
       );
-      expect(find.text('Oct 2026 cycle · tracking began Oct 1'),
-          findsOneWidget);
-      expect(find.textContaining('% of 40.0 GB'), findsOneWidget);
-      expect(find.text('Alert at 40.0 GB'), findsOneWidget);
-      // Sections present.
-      expect(find.text('DAY BY DAY'), findsOneWidget);
-      expect(find.text('PREVIOUS MONTHS'), findsOneWidget);
+      // Hero: big used number + the alert-line fraction.
+      expect(find.text('90 MB'), findsOneWidget);
+      expect(find.text('used'), findsOneWidget);
+      expect(find.textContaining('of 40.0 GB'), findsOneWidget);
+      expect(find.textContaining('cycle since Oct 1'), findsOneWidget);
+      // Breakdown rows: down/up split.
+      expect(find.text('Downloaded'), findsOneWidget);
+      expect(find.text('Uploaded'), findsOneWidget);
+      expect(find.text('60 MB'), findsOneWidget);
+      expect(find.text('30 MB'), findsOneWidget);
+      // Chart date corners.
+      expect(find.text('Oct 4'), findsOneWidget);
+      expect(find.text('Oct 8'), findsOneWidget);
       // History rows for both archived months.
+      expect(find.text('PREVIOUS MONTHS'), findsOneWidget);
       expect(find.text('Sep 2026'), findsOneWidget);
       expect(find.text('Aug 2026'), findsOneWidget);
-      // Chart labels: first and last day numbers rendered.
-      expect(find.text('4'), findsOneWidget);
-      expect(find.text('8'), findsOneWidget);
+      expect(find.text('Alert at 40.0 GB'), findsOneWidget);
     });
 
     testWidgets('renders without overflow on a narrow phone', (tester) async {
       await pump(
         tester,
-        await tab(feed: ValueNotifier<UsageHistory>(seeded)),
+        page(feed: ValueNotifier<UsageHistory>(seeded)),
         const Size(720, 1280),
       );
-      expect(find.textContaining('% of 40.0 GB'), findsOneWidget);
+      expect(find.text('90 MB'), findsOneWidget);
       expect(find.text('Aug 2026'), findsOneWidget);
     });
 
     testWidgets('empty ledger shows honest empty states', (tester) async {
       await pump(
         tester,
-        await tab(feed: ValueNotifier<UsageHistory>(const UsageHistory.empty())),
+        page(
+          feed: ValueNotifier<UsageHistory>(const UsageHistory.empty()),
+          alertFeed: ValueNotifier<double?>(null),
+        ),
         const Size(980, 1400),
       );
       expect(find.text('No usage observed yet'), findsOneWidget);
-      expect(find.text('No archived months yet'), findsOneWidget);
+      // No history section at all when nothing has been archived.
+      expect(find.text('PREVIOUS MONTHS'), findsNothing);
+      expect(find.textContaining('No alert line'), findsOneWidget);
     });
 
     testWidgets('alert editor saves a GB line and reports it', (tester) async {
       double? saved;
       await pump(
         tester,
-        await tab(
+        page(
           feed: ValueNotifier<UsageHistory>(seeded),
           onAlert: (mb) => saved = mb,
         ),
@@ -357,6 +367,25 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(saved, 25 * 1024);
+    });
+
+    testWidgets('tapping an archived month re-aims the page at it',
+        (tester) async {
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+        ),
+        const Size(980, 1400),
+      );
+      await tester.tap(find.text('Sep 2026'));
+      await tester.pumpAndSettle();
+      // The hero now shows the archived month's total, and the alert
+      // fraction disappears (it only applies to the live cycle).
+      expect(find.text('2.0 GB'), findsWidgets, reason: 'hero + history row both show it');
+      expect(find.textContaining('of 40.0 GB'), findsNothing);
+      expect(find.textContaining('ended Sep 30'), findsWidgets, reason: 'hero caption + history row');
     });
   });
 }

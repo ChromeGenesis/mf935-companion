@@ -12,8 +12,10 @@ without the browser.
   persisted, expiry chips + alerts, raw reply always attached). Values
   left over from a lost session are dimmed and stamped with their real age
   instead of pretending to be live
-- **Data** — monthly usage page: ring vs the alert line, per-day bars for
-  the live cycle, down/up split, month-end estimate, and archived-month
+- **Data** — full-screen usage page (One UI idiom, opened from the Status
+  hero's metric strip and the Info tab's traffic header): one big "used"
+  number vs the alert line, a cumulative area chart with 50%/100%
+  gridlines, a cycle picker, down/up breakdown, and archived-month
   history that survives every counter reset (rollovers archive, never
   erase); the alert line doubles as the monitor's low-data notification
 - **SMS** — device/SIM inbox grouped by sender, search, unread filter,
@@ -84,7 +86,8 @@ lib/
     dashboard.dart         shell: session, polling, tabs, recovery watchdog
     status_tab.dart        hero, data path, devices, speed test, scout
     ussd_tab.dart          dialer, menus, history, shortcuts
-    usage_tab.dart         usage ring, daily chart, month history
+    usage_page.dart        usage page: cycle picker, cumulative chart,
+                           down/up breakdown, archived months
     settings_tab.dart      connection, power, alerts, timeline, diagnostics
     scout_card.dart        Network Scout session + ranked results
     internet_check_card.dart  data-path probe card
