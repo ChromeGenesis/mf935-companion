@@ -302,7 +302,7 @@ class _UsagePageState extends State<UsagePage> {
                     ],
                   ),
                   SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
                     sliver: SliverList.list(
                       children: [
                         ValueListenableBuilder<UsageHistory>(
@@ -396,7 +396,7 @@ class _UsagePageState extends State<UsagePage> {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: c.surface.withAlpha(70),
+          color: c.surface.withAlpha(54),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: c.borderSubtle),
         ),
@@ -479,7 +479,7 @@ class _UsagePageState extends State<UsagePage> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              c.accent.withAlpha(isLive ? 46 : 22),
+              c.accent.withAlpha(isLive ? 34 : 16),
               c.accent.withAlpha(0),
             ],
           ),
@@ -495,18 +495,18 @@ class _UsagePageState extends State<UsagePage> {
                   isLive ? 'THIS CYCLE' : 'ARCHIVED',
                   style: TextStyle(
                     color: c.textMuted,
-                    fontSize: 10.5,
+                    fontSize: 10,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: 1.6,
+                    letterSpacing: 2,
                   ),
                 ),
                 const Spacer(),
                 Text(
                   range,
                   style: TextStyle(
-                    color: c.textSecondary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                    color: c.textMuted,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
@@ -546,8 +546,8 @@ class _UsagePageState extends State<UsagePage> {
                             'used',
                             style: TextStyle(
                               color: c.textMuted,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ],
@@ -569,36 +569,23 @@ class _UsagePageState extends State<UsagePage> {
                     capMb: alertMb,
                   )
                 else if (isLive)
-                  GestureDetector(
-                    onTap: _editAlert,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: c.accent.withAlpha(26),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: c.accent.withAlpha(90)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.notifications_active_outlined,
-                            size: 13,
-                            color: c.accentText,
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            'Set alert line',
-                            style: TextStyle(
-                              color: c.accentText,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
+                  Tooltip(
+                    message: 'Set alert line',
+                    child: GestureDetector(
+                      onTap: _editAlert,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: c.accent.withAlpha(20),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: c.accent.withAlpha(64)),
+                        ),
+                        child: Icon(
+                          Icons.notifications_active_outlined,
+                          size: 17,
+                          color: c.accentText,
+                        ),
                       ),
                     ),
                   ),
@@ -727,9 +714,9 @@ class _UsagePageState extends State<UsagePage> {
                 domainEnd: domainEnd,
                 projectedEndMb: isLive ? view.projectedMb() : null,
                 line: c.accent,
-                fillTop: c.accent.withAlpha(115),
-                fillBottom: c.accent.withAlpha(12),
-                grid: c.textMuted.withAlpha(90),
+                fillTop: c.accent.withAlpha(96),
+                fillBottom: c.accent.withAlpha(10),
+                grid: c.textMuted.withAlpha(68),
                 label: c.textMuted,
                 dotRing: c.textPrimary,
               ),
@@ -743,7 +730,7 @@ class _UsagePageState extends State<UsagePage> {
               children: [
                 Text(
                   shortDate(domainStart),
-                  style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                  style: TextStyle(color: c.textMuted, fontSize: 11),
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -756,7 +743,7 @@ class _UsagePageState extends State<UsagePage> {
                     const SizedBox(width: 2),
                     Text(
                       shortDate(domainEnd),
-                      style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                      style: TextStyle(color: c.textMuted, fontSize: 11),
                     ),
                   ],
                 ),
@@ -801,7 +788,7 @@ class _UsagePageState extends State<UsagePage> {
                   child: Text(
                     '${past.length} month${past.length == 1 ? '' : 's'} '
                     'tracked · ${ZteClient.formatDataVolume(total)} total',
-                    style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                    style: TextStyle(color: c.textMuted, fontSize: 11),
                   ),
                 ),
                 TextButton(
@@ -853,7 +840,7 @@ class _UsagePageState extends State<UsagePage> {
                       : 'Alert at ${ZteClient.formatDataVolume(alertMb)}',
                   style: TextStyle(
                     color: c.textSecondary,
-                    fontSize: 13,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -914,8 +901,8 @@ class _MonthRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(9),
                     border: Border.all(
                       color: selected
-                          ? c.accent.withAlpha(130)
-                          : c.accent.withAlpha(70),
+                          ? c.accent.withAlpha(110)
+                          : c.accent.withAlpha(56),
                     ),
                   ),
                   child: Icon(
@@ -973,7 +960,7 @@ class _MonthRow extends StatelessWidget {
                     FractionallySizedBox(
                       alignment: Alignment.centerLeft,
                       widthFactor: (cycle.usedMb / maxMb).clamp(0.02, 1.0),
-                      child: Container(color: c.accent.withAlpha(170)),
+                      child: Container(color: c.accent.withAlpha(150)),
                     ),
                   ],
                 ),
@@ -1087,8 +1074,8 @@ class _CumulativePainter extends CustomPainter {
     );
 
     // Marker on the newest real sample.
-    canvas.drawCircle(last, 4.4, Paint()..color = dotRing);
-    canvas.drawCircle(last, 2.9, Paint()..color = line);
+    canvas.drawCircle(last, 4.0, Paint()..color = dotRing);
+    canvas.drawCircle(last, 2.6, Paint()..color = line);
 
     // Dashed projection to the end of the billing window.
     if (projected != null) {
@@ -1099,7 +1086,7 @@ class _CumulativePainter extends CustomPainter {
       final dash = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.6
-        ..color = line.withAlpha(170);
+        ..color = line.withAlpha(150);
       for (final m in dashPath.computeMetrics()) {
         var dist = 0.0;
         while (dist < m.length) {
@@ -1162,7 +1149,7 @@ class _MiniRing extends StatelessWidget {
             alignment: Alignment.center,
             children: [
               CustomPaint(
-                size: const Size(68, 68),
+                size: const Size(64, 64),
                 painter: _MiniRingPainter(
                   sweep: sweep,
                   color: color,
