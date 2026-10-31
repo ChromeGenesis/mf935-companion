@@ -4,6 +4,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Stable release signing: the keystore is committed (see gradle.properties)
+// so every build — local or CI — produces upgrade-compatible APKs. When
+// it is absent (fresh fork clone), fall back to the debug key so the
+// build still succeeds.
+val releaseKeystore = rootProject.findProperty("mf935KeystoreStoreFile")
+    ?.let { rootProject.file(it) }
+val hasReleaseKeystore = releaseKeystore?.exists() == true
+
 android {
     namespace = "com.genesis.mificompanion"
     compileSdk = flutter.compileSdkVersion
@@ -26,11 +34,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = rootProject.findProperty("mf935KeystoreStorePassword")?.toString()
+                keyAlias = rootProject.findProperty("mf935KeystoreKeyAlias")?.toString()
+                keyPassword = rootProject.findProperty("mf935KeystoreKeyPassword")?.toString()
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                // No committed keystore available: debug-sign so
+                // `flutter build apk --release` still works.
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
