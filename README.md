@@ -12,6 +12,10 @@ without the browser.
   persisted, expiry chips + alerts, raw reply always attached). Values
   left over from a lost session are dimmed and stamped with their real age
   instead of pretending to be live
+- **Data** — monthly usage page: ring vs the alert line, per-day bars for
+  the live cycle, down/up split, month-end estimate, and archived-month
+  history that survives every counter reset (rollovers archive, never
+  erase); the alert line doubles as the monitor's low-data notification
 - **SMS** — device/SIM inbox grouped by sender, search, unread filter,
   multi-select + bulk actions, swipe delete, send, center settings
 - **USSD** — glass dialer field, dialpad keypad (`0` long-press = `+`),
@@ -37,12 +41,16 @@ without the browser.
 ```sh
 flutter pub get
 flutter run -d windows   # or -d linux
-flutter test             # 68 tests, must stay green
+flutter test             # 84 tests, must stay green
 ```
 
 Join the MF935 WiFi first; default gateway `192.168.0.1`, default password
 `admin`. One login session per device — close the stock web UI tab so it does
 not steal the session.
+
+Android APKs are signed with the committed sideload keystore
+(`android/mf935-signing.keystore`, passwords in `android/gradle.properties`)
+so CI and local builds are always in-place upgrades.
 
 ## How login works
 
@@ -67,6 +75,7 @@ lib/
     signal_locator.dart   RSRP/RSRQ/SINR sampling + 3GPP band guidance
     reachability.dart     gateway/DNS/HTTPS probe + fault localisation
     speed_test.dart       M-Lab ndt7 runner; speed_history.dart stores runs
+    usage_history.dart    monthly usage ledger: samples, rollover archive
     ussd_steps.dart       scripted multi-step USSD shortcut runner
     incident_report.dart  redacted text/JSON evidence bundle
     ui_kit.dart           GlassCard, SectionLabel, StatTile, PillSwitcher…
@@ -75,6 +84,7 @@ lib/
     dashboard.dart         shell: session, polling, tabs, recovery watchdog
     status_tab.dart        hero, data path, devices, speed test, scout
     ussd_tab.dart          dialer, menus, history, shortcuts
+    usage_tab.dart         usage ring, daily chart, month history
     settings_tab.dart      connection, power, alerts, timeline, diagnostics
     scout_card.dart        Network Scout session + ranked results
     internet_check_card.dart  data-path probe card

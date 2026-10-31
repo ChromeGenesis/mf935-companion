@@ -176,6 +176,24 @@ These are valuable, but should wait until the core monitoring is trustworthy.
 - [ ] Compare two Scout sessions side by side.
 - [ ] Optional encrypted backup of local history.
 
+## Phase 10: Data Usage & History
+
+The firmware's monthly counter resets at every billing rollover; before
+this phase, that reset erased the only copy of the month's usage.
+
+- [x] Persisted usage ledger: every poll samples the monthly counters, a
+      counter drop beyond the jitter tolerance archives the finished
+      cycle with its peak (`lib/core/usage_history.dart`).
+- [x] Data tab: usage ring vs the alert line, daily bar chart derived
+      from the ledger's daily cumulatives, down/up split, month-end
+      estimate, peak day, and "sampled X ago" staleness stamping.
+- [x] Archived-months history (newest first, 24-cycle cap) with per-month
+      bars, averages, and a confirmed clear action.
+- [x] Alert line shared by the ring and the poller's low-data
+      notification, edited on the Data tab, persisted across restarts.
+- [x] Parse guard: unparseable counters are skipped, never recorded as
+      fake zeros that would read as a rollover.
+
 ## Explicitly Out Of Scope For Now
 
 - [ ] Cloud accounts or remote access.

@@ -25,6 +25,7 @@ class BottomNavBar extends StatelessWidget {
     (Icons.sms_outlined, Icons.sms, 'SMS'),
     (Icons.dialpad_outlined, Icons.dialpad, 'USSD'),
     (Icons.info_outline, Icons.info, 'Info'),
+    (Icons.data_usage_outlined, Icons.data_usage, 'Data'),
     (Icons.settings_outlined, Icons.settings, 'Settings'),
   ];
 

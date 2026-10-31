@@ -28,6 +28,7 @@ import '../core/speed_history.dart';
 import '../core/speed_test.dart';
 import '../core/signal_locator.dart';
 import '../core/smart_alerts.dart';
+import '../core/usage_history.dart';
 import 'bottom_nav.dart';
 import 'info_tab.dart';
 import 'settings_tab.dart';
@@ -38,6 +39,7 @@ import 'sidebar.dart';
 import 'sms_tab.dart';
 import 'status_tab.dart';
 import '../core/theme.dart';
+import 'usage_tab.dart';
 import 'ussd_tab.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
@@ -102,6 +104,16 @@ class _DashboardPageState extends State<DashboardPage>
   final ValueNotifier<SignalSample?> _signalFeed = ValueNotifier<SignalSample?>(
     null,
   );
+
+  /// Usage ledger feed: poller samples + manual refreshes land here;
+  /// the Data tab listens. Persisted, so months survive restarts and
+  /// counter resets are archived instead of lost.
+  final ValueNotifier<UsageHistory> _usageFeed =
+      ValueNotifier<UsageHistory>(const UsageHistory.empty());
+
+  /// The usage alert line (MB): ring denominator on the Data tab and
+  /// the poller's low-data threshold — one setting, two consumers.
+  double? _usageAlertMb;
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
@@ -186,6 +198,7 @@ class _DashboardPageState extends State<DashboardPage>
     _localApi.stop();
     _balanceFeed.dispose();
     _signalFeed.dispose();
+    _usageFeed.dispose();
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
@@ -197,6 +210,9 @@ class _DashboardPageState extends State<DashboardPage>
     final ip = prefs.getString('gateway_ip') ?? '192.168.0.1';
     final pw = prefs.getString('admin_password') ?? 'admin';
     final lastFired = await SmartAlertStore.loadLastFired();
+    // Usage ledger + alert line: restored with everything else so the
+    // Data tab is populated before the first poll lands.
+    final usage = await UsageHistory.load();
     // Restore the persisted log first so anything logged this session
     // lands under what came before it.
     var restored = <String>[];
@@ -216,6 +232,8 @@ class _DashboardPageState extends State<DashboardPage>
       _ipCtrl.text = ip;
       _passCtrl.text = pw;
       _client.gatewayIp = ip;
+      _usageFeed.value = usage;
+      _usageAlertMb = prefs.getDouble('usage_alert_mb');
     });
     _startupAuth();
   }
@@ -526,12 +544,74 @@ class _DashboardPageState extends State<DashboardPage>
         _status = s;
         _statusAt = DateTime.now();
       });
+      // Manual refreshes feed the ledger too, so the Data tab is
+      // current even before the next poll tick.
+      final sample = UsageHistory.parseMonthlyUsage(s);
+      if (sample != null) {
+        unawaited(_onUsageSample(sample.$1, sample.$2, sample.$3));
+      }
       _logLine('status poll ok');
     } catch (e) {
       _logLine('status poll failed: $e');
       if (!mounted) return;
       setState(() => _loginOk = false);
     }
+  }
+
+  /// Fold one monthly-counter sample into the usage ledger (poller and
+  /// manual refreshes share this path). A cycle close (counter drop)
+  /// archives the finished month — that archive is the whole point:
+  /// before the ledger existed, a rollover erased the only copy.
+  Future<void> _onUsageSample(double totalMb, double rxMb, double txMb) async {
+    try {
+      final prev = _usageFeed.value;
+      final next = prev.record(totalMb, rxMb, txMb, DateTime.now());
+      if (identical(next, prev)) return; // nothing changed, don't rewrite
+      _usageFeed.value = next;
+      await next.save();
+      if (next.past.length > prev.past.length) {
+        final archived = next.past.first;
+        _logLine(
+          'data counters reset — archived '
+          '${ZteClient.formatDataVolume(archived.usedMb)} (${archived.label})',
+        );
+      }
+    } catch (_) {
+      // A ledger write must never break the poll loop.
+    }
+  }
+
+  /// Data tab → alert line: persisted here, applied to the poller so
+  /// the usage notification and the ring share one number.
+  Future<void> _setUsageAlert(double? mb) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mb == null) {
+        await prefs.remove('usage_alert_mb');
+      } else {
+        await prefs.setDouble('usage_alert_mb', mb);
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _usageAlertMb = mb;
+      _poller?.lowDataMb = mb;
+    });
+    _logLine(
+      mb == null
+          ? 'usage alert line removed'
+          : 'usage alert line set: ${ZteClient.formatDataVolume(mb)}',
+    );
+  }
+
+  /// Data tab → clear archives (live cycle keeps tracking).
+  Future<void> _clearUsageHistory() async {
+    try {
+      final next = _usageFeed.value.clearedPast();
+      _usageFeed.value = next;
+      await next.save();
+    } catch (_) {}
+    _logLine('usage history cleared');
   }
 
   Future<void> _notifyNow(String title, String body) =>
@@ -604,6 +684,8 @@ class _DashboardPageState extends State<DashboardPage>
       },
       onUnreachable: _onPollerUnreachable,
       onDevices: _deviceTick,
+      onUsage: (totalMb, rxMb, txMb) =>
+          unawaited(_onUsageSample(totalMb, rxMb, txMb)),
     )..start();
     _applyMonitorSettings();
     _logLine('poller started — minimize to tray to keep polling');
@@ -791,6 +873,12 @@ class _DashboardPageState extends State<DashboardPage>
       p.lowBatteryNotify = ms.lowBatteryNotify;
       p.fullBatteryNotify = ms.fullBatteryNotify;
       p.lightMode = ms.mode == MonitorMode.travel;
+      // The usage alert line lives with the Data tab's setting; it
+      // must survive a poller restart (monitor-mode switch re-arms it).
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        p.lowDataMb = prefs.getDouble('usage_alert_mb');
+      } catch (_) {}
       if (p.interval != want) {
         p.interval = want;
         if (p.running) {
@@ -1008,7 +1096,7 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// All five tab bodies, index-aligned with the nav. They live in an
+  /// All six tab bodies, index-aligned with the nav. They live in an
   /// [IndexedStack] so switching tabs never disposes state — scroll
   /// offsets, selections, text fields and loaded data are exactly
   /// where you left them.
@@ -1022,6 +1110,16 @@ class _DashboardPageState extends State<DashboardPage>
       onUnsupported: _markUnsupported,
     ),
     InfoTab(client: _client, connected: _connected, log: _logLine),
+    UsageTab(
+      client: _client,
+      connected: _connected,
+      usageFeed: _usageFeed,
+      alertMb: _usageAlertMb,
+      onAlertChanged: (mb) => unawaited(_setUsageAlert(mb)),
+      onSample: (t, rx, tx) => unawaited(_onUsageSample(t, rx, tx)),
+      onClearHistory: () => unawaited(_clearUsageHistory()),
+      log: _logLine,
+    ),
     SettingsTab(
       client: _client,
       connected: _connected,

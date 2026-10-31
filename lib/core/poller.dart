@@ -25,6 +25,7 @@ class ZtePoller {
     this.onStatus,
     this.onUnreachable,
     this.onDevices,
+    this.onUsage,
   });
 
   final ZteClient _client;
@@ -49,6 +50,12 @@ class ZtePoller {
   /// Station snapshots for device intelligence, every 10th tick
   /// (~5 min, offset from the SMS-capacity probe to spread load).
   void Function(List<AttachedDevice> stations)? onDevices;
+
+  /// Monthly-counter sample for the usage ledger, fired only when the
+  /// firmware actually reported the counters (an unparseable pair
+  /// sampled as 0 would read as a rollover and archive a healthy
+  /// cycle — never invent the zero).
+  void Function(double totalMb, double rxMb, double txMb)? onUsage;
 
   Timer? _timer;
   int _tickCount = 0;
@@ -106,6 +113,15 @@ class ZtePoller {
     final rx = double.tryParse('${status['monthly_rx_bytes'] ?? '0'}') ?? 0;
     final tx = double.tryParse('${status['monthly_tx_bytes'] ?? '0'}') ?? 0;
     final usedMb = (rx + tx) / (1024 * 1024);
+
+    // Usage ledger feed — parse-guarded (see [onUsage]).
+    final rxRaw = '${status['monthly_rx_bytes'] ?? ''}';
+    final txRaw = '${status['monthly_tx_bytes'] ?? ''}';
+    if (rxRaw.isNotEmpty || txRaw.isNotEmpty) {
+      final rxMb = (double.tryParse(rxRaw) ?? 0) / (1024 * 1024);
+      final txMb = (double.tryParse(txRaw) ?? 0) / (1024 * 1024);
+      onUsage?.call(rxMb + txMb, rxMb, txMb);
+    }
 
     // Battery sample for the health/drain readout (best-effort).
     if (battery != null) {
