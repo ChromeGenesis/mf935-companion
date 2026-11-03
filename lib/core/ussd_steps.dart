@@ -91,6 +91,31 @@ class UssdShortcut {
   String get flowLabel =>
       [code.trim(), ...steps.map((s) => s.trim())].join(' \u2192 ');
 
+  /// A carrier menu asking for a PIN: "Enter PIN to…", "Please enter
+  /// your PIN", "Type PIN", … Matched loosely on purpose — carriers
+  /// phrase it a dozen ways, and missing one leaks a secret.
+  static final pinPromptPattern = RegExp(
+    r'(enter|type|input|provide|required).{0,30}\bpin\b|\bpin\b.{0,30}(enter|input|type|provide|required|confirm|needed)',
+    caseSensitive: false,
+  );
+
+  /// True when the modem is asking for a PIN right now.
+  static bool isPinPrompt(String text) => pinPromptPattern.hasMatch(text);
+
+  /// A typed PIN: 4–6 digits and nothing else. Single menu digits ('3')
+  /// never qualify; neither does anything with non-digit characters.
+  static bool looksLikePin(String s) =>
+      RegExp(r'^\d{4,6}$').hasMatch(s.trim());
+
+  /// [flowLabel] with PIN-shaped steps dotted out — for logs and any
+  /// surface where a secret must never print.
+  String get safeFlowLabel {
+    final shown = steps.map(
+      (s) => UssdShortcut.looksLikePin(s) ? '••••' : s,
+    );
+    return [code.trim(), ...shown.map((s) => s.trim())].join(' → ');
+  }
+
   Map<String, dynamic> toJson() => {
     'code': code,
     if (steps.isNotEmpty) 'steps': steps,
@@ -221,5 +246,5 @@ String describeUssdRun(UssdShortcut shortcut, UssdRunResult run) {
     UssdStop.stepsExhausted => 'still open after ${run.stepsSent} step(s)',
     UssdStop.error => 'failed (${run.message ?? 'error'})',
   };
-  return 'USSD ${shortcut.flowLabel}: $outcome';
+  return 'USSD ${shortcut.safeFlowLabel}: $outcome';
 }

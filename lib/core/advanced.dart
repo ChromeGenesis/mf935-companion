@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'incident_report.dart';
 import 'speed_history.dart';
+import 'usage_history.dart';
 
 // ── Best time of day ─────────────────────────────────────────────
 
@@ -65,14 +66,10 @@ class ScheduledDiag {
     this.lastRunDay = '',
   });
 
-  static String dayKey(DateTime t) =>
-      '${t.year}-${t.month.toString().padLeft(2, '0')}-'
-      '${t.day.toString().padLeft(2, '0')}';
-
   /// Due when enabled, the hour matches, and today hasn't run.
-  /// Pure + tested.
+  /// Pure + tested. Day keys come from the usage ledger's SSOT helper.
   bool dueAt(DateTime now) =>
-      enabled && now.hour == hour && lastRunDay != dayKey(now);
+      enabled && now.hour == hour && lastRunDay != UsageHistory.dayKey(now);
 
   Map<String, dynamic> toJson() => {
     'enabled': enabled,

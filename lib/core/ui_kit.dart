@@ -123,6 +123,63 @@ class GlassCard extends StatelessWidget {
   }
 }
 
+/// Thin share-of-max bar (SSOT): the same track + left-aligned fill
+/// everywhere a part-of-a-whole is shown — plan quota, archived
+/// months, bundle sizes. One widget so the radius, heights and the
+/// 0.02 minimum fill never drift apart again.
+///
+/// [markerFraction], when set, draws a 2 px tick (e.g. where the
+/// carrier's own remaining puts consumption on the same bar).
+class ShareBar extends StatelessWidget {
+  final double fraction;
+  final Color color;
+  final double height;
+  final double? markerFraction;
+  final Color? markerColor;
+
+  const ShareBar({
+    super.key,
+    required this.fraction,
+    required this.color,
+    this.height = 4,
+    this.markerFraction,
+    this.markerColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.zc;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(99),
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          children: [
+            Container(color: c.textMuted.withAlpha(34)),
+            FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: fraction.clamp(0.02, 1.0),
+              child: Container(color: color),
+            ),
+            if (markerFraction != null)
+              Align(
+                alignment: Alignment(
+                  markerFraction!.clamp(0.0, 1.0) * 2 - 1,
+                  0,
+                ),
+                child: Container(
+                  width: 2,
+                  height: height,
+                  color: markerColor ?? c.textPrimary,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Small caps section label, Rhema style.
 class SectionLabel extends StatelessWidget {
   final String text;

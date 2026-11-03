@@ -17,6 +17,8 @@ import 'dart:math' as math;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'zte_utils.dart' as zu;
+
 const _months = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -33,9 +35,8 @@ String monthAbbr(DateTime d) => _months[d.month - 1];
 /// month even before any sample exists.
 DateTime monthStart(DateTime d) => DateTime(d.year, d.month);
 
-DateTime monthEnd(DateTime d) => DateTime(d.year, d.month, daysInMonthOf(d));
-
-int daysInMonthOf(DateTime d) => DateTime(d.year, d.month + 1, 0).day;
+DateTime monthEnd(DateTime d) =>
+    DateTime(d.year, d.month, UsageHistory.daysInMonth(d));
 
 /// One observed billing cycle. [usedMb] is the peak cumulative total
 /// seen (counters only grow within a cycle, so the peak is the month's
@@ -86,11 +87,30 @@ class CycleUsage {
 
   double get avgPerDayMb => usedMb / daysObserved;
 
-  /// Rough end-of-month projection: average so far × calendar length
-  /// of the month the cycle last reported in. Genuinely rough when
-  /// [startKnown] is false (the first observed day then carries the
-  /// pre-join usage), so the UI labels it as an estimate.
-  double projectedMb() => avgPerDayMb * UsageHistory.daysInMonth(lastAt);
+  /// The burn rate the forecast actually uses. When the cycle start
+  /// was witnessed, every day's delta is real and the plain average
+  /// is honest. When the app joined mid-cycle, the first observed
+  /// day carries pre-join usage in its cumulative, so it is excluded:
+  /// trend = (used - firstDayCumulative) / (days - 1). Single-day,
+  /// mid-cycle joins have no measurable trend and fall back to the
+  /// plain average (the UI gates the forecast display until a second
+  /// day lands — see [hasTrend]).
+  double get trendPerDayMb {
+    if (startKnown || daily.length <= 1) return avgPerDayMb;
+    final keys = daily.keys.toList()..sort();
+    final firstCum = daily[keys.first] ?? 0;
+    final rest = math.max(0.0, usedMb - firstCum);
+    return rest / (daily.length - 1);
+  }
+
+  /// True when a forecast is worth showing: a witnessed start, or at
+  /// least two observed days to measure a trend from.
+  bool get hasTrend => startKnown || daily.length >= 2;
+
+  /// Rough end-of-month estimate: observed burn rate × calendar length
+  /// of the month the cycle last reported in. Genuinely rough on day
+  /// one (see [trendPerDayMb]) — the UI labels it as an estimate.
+  double projectedMb() => trendPerDayMb * UsageHistory.daysInMonth(lastAt);
 
   /// Per-day usage derived from consecutive daily cumulatives. The
   /// first day's delta is only known when the cycle's start was
@@ -328,8 +348,8 @@ class UsageHistory {
     final rxRaw = '${s['monthly_rx_bytes'] ?? ''}';
     final txRaw = '${s['monthly_tx_bytes'] ?? ''}';
     if (rxRaw.isEmpty && txRaw.isEmpty) return null;
-    final rx = (double.tryParse(rxRaw) ?? 0) / (1024 * 1024);
-    final tx = (double.tryParse(txRaw) ?? 0) / (1024 * 1024);
+    final rx = zu.bytesToMb(rxRaw);
+    final tx = zu.bytesToMb(txRaw);
     return (rx + tx, rx, tx);
   }
 }

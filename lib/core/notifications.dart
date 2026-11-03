@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 /// Monotonic id: timestamp-seconds collide when two alerts fire in the
@@ -40,13 +41,53 @@ void resetNotificationDedup() {
   _lastAt = null;
 }
 
+/// OTP / verification code inside free text: 4–8 digits mentioned
+/// alongside code words. The digit run must not touch `*` or `#`, so a
+/// USSD code like *939*77*5# never matches. Null when there is no code
+/// to copy.
+String? extractOtp(String text) {
+  if (!RegExp(
+    r'otp|one[\s-]?time|verification|verify|passcode|confirm|\bcode\b|\bpin\b',
+    caseSensitive: false,
+  ).hasMatch(text)) {
+    return null;
+  }
+  final m = RegExp(r'(?<![\d*#])\d{4,8}(?![\d*#])').firstMatch(text);
+  return m?.group(0);
+}
+
+/// Copy-code action id + payload shape (`otp:<code>`).
+const otpCopyActionId = 'copy_otp';
+
+String otpPayload(String code) => 'otp:$code';
+
+/// Handles notification taps when the app is alive. A tap on the copy
+/// action drops just the code on the clipboard (the full message stays
+/// in the SMS tab); a body tap does nothing — opening the app is the
+/// platform default. Never throws: a failed copy must not crash boot.
+Future<void> notificationResponseHandler(NotificationResponse r) async {
+  try {
+    if (r.actionId == otpCopyActionId &&
+        (r.payload ?? '').startsWith('otp:')) {
+      await Clipboard.setData(
+        ClipboardData(text: r.payload!.substring('otp:'.length)),
+      );
+    }
+  } catch (_) {}
+}
+
 /// Single place that knows how to raise a toast on every desktop target.
 /// Main + poller + tabs all go through here (SSOT).
+///
+/// [otpCode] adds a "Copy code" action (Android) so a verification code
+/// can be lifted straight from the notification shade. The payload
+/// carries the code; [notificationResponseHandler] does the copying.
 Future<void> showAlert(
   FlutterLocalNotificationsPlugin plugin,
   String title,
-  String body,
-) async {
+  String body, {
+  String? otpCode,
+}) async {
   final now = DateTime.now();
   if (isDuplicateAlert(
     lastTitle: _lastTitle,
@@ -62,22 +103,33 @@ Future<void> showAlert(
   _lastTitle = title;
   _lastBody = body;
   _lastAt = now;
-  const details = NotificationDetails(
-    linux: LinuxNotificationDetails(),
+  final details = NotificationDetails(
+    linux: const LinuxNotificationDetails(),
     android: AndroidNotificationDetails(
       'zte_status',
       'ZTE status',
       channelDescription: 'MiFi Companion modem alerts',
       importance: Importance.high,
       priority: Priority.high,
+      actions: otpCode == null
+          ? null
+          : const [
+              AndroidNotificationAction(
+                otpCopyActionId,
+                'Copy code',
+                showsUserInterface: false,
+                cancelNotification: false,
+              ),
+            ],
     ),
-    windows: WindowsNotificationDetails(),
+    windows: const WindowsNotificationDetails(),
   );
   return plugin.show(
     id: _nextId++,
     title: title,
     body: body,
     notificationDetails: details,
+    payload: otpCode == null ? null : otpPayload(otpCode),
   );
 }
 

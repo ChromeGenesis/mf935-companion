@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/capability.dart';
 import '../core/theme.dart';
+import '../core/usage_history.dart';
 import '../core/widgets.dart';
 import '../core/zte_client.dart';
 
@@ -14,12 +16,17 @@ class InfoTab extends StatefulWidget {
   /// Open the full-screen data-usage page (from the traffic header).
   final VoidCallback? onOpenUsage;
 
+  /// Ledger feed for the honest daily average (measured trend, not
+  /// day-of-month division). Null = no samples yet, shows '—'.
+  final ValueListenable<UsageHistory>? usageFeed;
+
   const InfoTab({
     super.key,
     required this.client,
     required this.connected,
     required this.log,
     this.onOpenUsage,
+    this.usageFeed,
   });
 
   @override
@@ -92,6 +99,16 @@ class _InfoTabState extends State<InfoTab> {
       widget.log('counter reset failed: $e');
     }
     _load();
+  }
+
+  /// Honest daily average from the usage ledger's measured trend —
+  /// never day-of-month division, which invents usage on quiet days.
+  String _dailyAverage() {
+    final live = widget.usageFeed?.value.current;
+    if (live != null && live.hasTrend) {
+      return ZteClient.formatDataVolume(live.trendPerDayMb);
+    }
+    return '—';
   }
 
   /// dBm → 0..5 bars + plain-English quality. -1 when unknown.
@@ -410,11 +427,7 @@ class _InfoTabState extends State<InfoTab> {
           _liveRow(c, 'Live up', ZteClient.formatRate(rtx)),
           const SizedBox(height: 8),
           _liveRow(c, 'Live total', ZteClient.formatRate(rrx + rtx)),
-          _liveRow(
-            c,
-            'Daily average down',
-            "${(rxMb / (DateTime.now().day)).toStringAsFixed(1)} MB",
-          ),
+          _liveRow(c, 'Daily average', _dailyAverage()),
         ],
       ),
     );

@@ -44,7 +44,10 @@ Future<void> main() async {
     ),
     android: AndroidInitializationSettings('@mipmap/ic_launcher'),
   );
-  await _notifications.initialize(settings: initSettings);
+  await _notifications.initialize(
+    settings: initSettings,
+    onDidReceiveNotificationResponse: notificationResponseHandler,
+  );
   // Android 13+ drops show() silently until the runtime grant exists —
   // ask once at boot so alerts actually appear.
   await requestNotificationPermission(_notifications);

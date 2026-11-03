@@ -15,7 +15,12 @@ String _quietLabel(int m) =>
     m <= 0 ? 'Off' : (m < 60 ? '${m}m' : '${m ~/ 60}h');
 
 class SmartAlertsCard extends StatefulWidget {
-  const SmartAlertsCard({super.key});
+  /// Fired after a save so the shell can refresh whatever it caches
+  /// from the store (the poller tick reads settings every 30 s, so it
+  /// keeps a copy instead).
+  final VoidCallback? onChanged;
+
+  const SmartAlertsCard({super.key, this.onChanged});
 
   @override
   State<SmartAlertsCard> createState() => _SmartAlertsCardState();
@@ -49,6 +54,7 @@ class _SmartAlertsCardState extends State<SmartAlertsCard> {
       _busy = true;
     });
     await SmartAlertStore.saveSettings(s);
+    widget.onChanged?.call();
     if (mounted) setState(() => _busy = false);
   }
 

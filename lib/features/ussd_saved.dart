@@ -102,6 +102,76 @@ List<UssdSaved> upsertUssdCode(List<UssdSaved> saved, UssdSaved result) {
   ].take(_maxSaved).toList();
 }
 
+// ── PIN privacy (SSOT) ────────────────────────────────────────────
+
+/// A carrier menu asking for a PIN (core matcher lives on
+/// [UssdShortcut] so the shortcut runner shares it). Matched loosely on
+/// purpose — carriers phrase it a dozen ways, and missing one leaks a
+/// secret.
+
+/// True when the modem is asking for a PIN right now (core matcher).
+bool isPinPrompt(String text) => UssdShortcut.isPinPrompt(text);
+
+/// A typed PIN: 4–6 digits and nothing else. Single menu digits ('3')
+/// never qualify; neither does anything with non-digit characters.
+bool looksLikePin(String s) => UssdShortcut.looksLikePin(s);
+
+/// Redact one history entry before it is persisted:
+///
+/// * a reply that IS a PIN prompt is dropped entirely (returns null) —
+///   prompts must never sit in the history;
+/// * a typed PIN answer ('↳ 1234') becomes '↳ ••••' when a prompt is
+///   outstanding ([pinExpected]).
+///
+/// Everything else passes through untouched.
+UssdHistoryEntry? scrubPinEntry(
+  UssdHistoryEntry entry, {
+  required bool pinExpected,
+}) {
+  if (isPinPrompt(entry.reply)) return null;
+  if (pinExpected &&
+      entry.request.startsWith('↳') &&
+      looksLikePin(entry.request.substring(1))) {
+    return UssdHistoryEntry(
+      request: '↳ ••••',
+      reply: entry.reply,
+      ok: entry.ok,
+      at: entry.at,
+      rawReply: entry.rawReply,
+    );
+  }
+  return entry;
+}
+
+const _savedPinKey = 'ussd_saved_pin';
+
+/// The user-confirmed PIN, reused to prefill PIN prompts. Null = none
+/// saved. Stored plainly in app-private prefs — same shelf as the
+/// saved shortcuts, never in the history or the log.
+Future<String?> loadSavedPin() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final pin = prefs.getString(_savedPinKey);
+    return pin != null && looksLikePin(pin) ? pin : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> saveSavedPin(String pin) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_savedPinKey, pin.trim());
+  } catch (_) {}
+}
+
+Future<void> clearSavedPin() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_savedPinKey);
+  } catch (_) {}
+}
+
 // ── Session history (persisted) ─────────────────────────────────────
 
 /// One USSD transaction worth remembering: the dialed code (or "↳ n"
@@ -320,7 +390,7 @@ class _SavedChip extends StatelessWidget {
             if (saved.isMultiStep) ...[
               const SizedBox(width: 4),
               Text(
-                '→${saved.steps.join('→')}',
+                '→${saved.steps.map((s) => UssdShortcut.looksLikePin(s) ? '••••' : s).join('→')}',
                 style: TextStyle(
                   color: c.accentText,
                   fontSize: 10.5,

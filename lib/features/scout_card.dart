@@ -198,69 +198,53 @@ class _NetworkScoutCardState extends State<NetworkScoutCard> {
     final session = _sessions.where((s) => s.id == id).firstOrNull;
     if (session == null || !mounted) return;
     final ctrl = TextEditingController(text: session.label);
-    final label = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
-          child: GlassModal(
-            icon: Icons.place_outlined,
-            title: 'Name this spot',
-            subtitle: '${session.sampleCount} samples over '
-                '${session.duration.inSeconds}s — where was the MiFi?',
-            body: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  key: const Key('scout-label-field'),
-                  controller: ctrl,
-                  autofocus: true,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Spot name',
-                    hintText: 'e.g. Upstairs window',
-                    isDense: true,
-                  ),
-                  onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final name in scoutSpotSuggestions)
-                      ActionChip(
-                        label: Text(name, style: const TextStyle(fontSize: 11)),
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => Navigator.of(ctx).pop(name),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () => Navigator.of(
-                        ctx,
-                      ).pop(ctrl.text.trim()),
-                      child: const Text('Save'),
-                    ),
-                  ],
-                ),
-              ],
+    final label = await showGlassModal<String>(
+      context,
+      icon: Icons.place_outlined,
+      title: 'Name this spot',
+      subtitle: '${session.sampleCount} samples over '
+          '${session.duration.inSeconds}s — where was the MiFi?',
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('scout-label-field'),
+            controller: ctrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Spot name',
+              hintText: 'e.g. Upstairs window',
+              isDense: true,
             ),
+            onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
           ),
-        );
-      },
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final name in scoutSpotSuggestions)
+                ActionChip(
+                  label: Text(name, style: const TextStyle(fontSize: 11)),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => Navigator.of(context).pop(name),
+                ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
     );
     ctrl.dispose();
     if (label == null || !mounted) return;

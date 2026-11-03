@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../core/expiry_widgets.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
+import '../core/ui_kit.dart';
 import '../core/zte_utils.dart';
 
 /// Balance section: total, bundles, raw. The side-by-side hero supplies
@@ -179,17 +180,10 @@ class BalanceSection extends StatelessWidget {
                     ),
                     if (!bundle.exhausted && maxMb > 0) ...[
                       const SizedBox(height: 4),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(99),
-                        child: Container(
-                          height: 3,
-                          color: c.textMuted.withAlpha(45),
-                          child: FractionallySizedBox(
-                            alignment: Alignment.centerLeft,
-                            widthFactor: (bundle.mb / maxMb).clamp(0.02, 1.0),
-                            child: Container(color: c.accentText),
-                          ),
-                        ),
+                      ShareBar(
+                        fraction: bundle.mb / maxMb,
+                        color: c.accentText,
+                        height: 3,
                       ),
                     ],
                   ],

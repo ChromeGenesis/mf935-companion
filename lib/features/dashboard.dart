@@ -29,6 +29,7 @@ import '../core/speed_test.dart';
 import '../core/signal_locator.dart';
 import '../core/smart_alerts.dart';
 import '../core/usage_history.dart';
+import '../core/data_plan.dart';
 import 'bottom_nav.dart';
 import 'info_tab.dart';
 import 'settings_tab.dart';
@@ -105,6 +106,12 @@ class _DashboardPageState extends State<DashboardPage>
     null,
   );
 
+  /// Live station snapshots from the poller: the Status devices card
+  /// renders these (renames included) instead of waiting for a manual
+  /// refresh. Empty until the first poller tick lands.
+  final ValueNotifier<List<AttachedDevice>> _devicesFeed =
+      ValueNotifier<List<AttachedDevice>>(const []);
+
   /// Usage ledger feed: poller samples + manual refreshes land here;
   /// the usage page listens. Persisted, so months survive restarts and
   /// counter resets are archived instead of lost.
@@ -114,6 +121,17 @@ class _DashboardPageState extends State<DashboardPage>
   /// The usage alert line (MB): ring denominator on the usage page and
   /// the poller's low-data threshold — one setting, two consumers.
   final ValueNotifier<double?> _usageAlert = ValueNotifier<double?>(null);
+
+  /// Data-plan feed: entered once on the usage page, derived forever
+  /// after (burn from the ledger, days from the clock, top-ups from
+  /// balance jumps). Null = not tracking a plan.
+  final ValueNotifier<DataPlanState?> _planFeed =
+      ValueNotifier<DataPlanState?>(null);
+
+  /// Last carrier balance total seen: the auto top-up detector compares
+  /// each fresh snapshot against it. Persisted so a restart never reads
+  /// a normal refresh as a purchase.
+  double? _lastBalanceMb;
   Timer? _cooldownTimer;
   DateTime? _cooldownUntil;
   final CapabilityRegistry capabilities = CapabilityRegistry();
@@ -136,8 +154,11 @@ class _DashboardPageState extends State<DashboardPage>
 
   /// Phase 5 smart-alert engine: fed by every poller tick, fires
   /// evidence-bearing notifications. Last-fired map is restored from
-  /// prefs so the quiet period survives restarts.
+  /// prefs so the quiet period survives restarts. Settings are cached
+  /// (refreshed wherever they can change) instead of re-read from
+  /// disk on every 30 s tick.
   final SmartAlertEngine _alerts = SmartAlertEngine();
+  SmartAlertSettings? _smartSettings;
 
   /// Key into the Status tab for pull-to-refresh (its state owns the
   /// balance/devices/signal refresh legs).
@@ -176,6 +197,7 @@ class _DashboardPageState extends State<DashboardPage>
     }
     _client = ZteClient();
     _restoreSettings();
+    _balanceFeed.addListener(_watchBalanceJump);
     _housekeeping = Timer.periodic(
       const Duration(minutes: 1),
       (_) => _runHousekeeping(),
@@ -196,10 +218,13 @@ class _DashboardPageState extends State<DashboardPage>
     unawaited(_logStore.flush());
     unawaited(_timeline.flush());
     _localApi.stop();
+    _balanceFeed.removeListener(_watchBalanceJump);
     _balanceFeed.dispose();
     _signalFeed.dispose();
+    _devicesFeed.dispose();
     _usageFeed.dispose();
     _usageAlert.dispose();
+    _planFeed.dispose();
     _poller?.stop();
     _ipCtrl.dispose();
     _passCtrl.dispose();
@@ -214,6 +239,7 @@ class _DashboardPageState extends State<DashboardPage>
     // Usage ledger + alert line: restored with everything else so the
     // Data tab is populated before the first poll lands.
     final usage = await UsageHistory.load();
+    final plan = await DataPlanState.load();
     // Restore the persisted log first so anything logged this session
     // lands under what came before it.
     var restored = <String>[];
@@ -225,6 +251,9 @@ class _DashboardPageState extends State<DashboardPage>
     } catch (_) {}
     if (!mounted) return;
     _alerts.lastFired.addAll(lastFired);
+    try {
+      _smartSettings = await SmartAlertStore.loadSettings();
+    } catch (_) {}
     _applyLocalApi(); // persisted toggle takes effect on launch
     setState(() {
       _log
@@ -233,8 +262,10 @@ class _DashboardPageState extends State<DashboardPage>
       _ipCtrl.text = ip;
       _passCtrl.text = pw;
       _client.gatewayIp = ip;
-      _usageFeed.value = usage;
+    _usageFeed.value = usage;
       _usageAlert.value = prefs.getDouble('usage_alert_mb');
+      _planFeed.value = plan;
+      _lastBalanceMb = prefs.getDouble('balance_last_total_mb');
     });
     _startupAuth();
   }
@@ -409,6 +440,9 @@ class _DashboardPageState extends State<DashboardPage>
           connected: _connected,
           usageFeed: _usageFeed,
           alertFeed: _usageAlert,
+          planFeed: _planFeed,
+          balanceFeed: _balanceFeed,
+          onPlanChanged: (p) => unawaited(_setDataPlan(p)),
           onAlertChanged: (mb) => unawaited(_setUsageAlert(mb)),
           onSample: (t, rx, tx) => unawaited(_onUsageSample(t, rx, tx)),
           onClearHistory: () => unawaited(_clearUsageHistory()),
@@ -588,17 +622,37 @@ class _DashboardPageState extends State<DashboardPage>
       final next = prev.record(totalMb, rxMb, txMb, DateTime.now());
       if (identical(next, prev)) return; // nothing changed, don't rewrite
       _usageFeed.value = next;
-      await next.save();
-      if (next.past.length > prev.past.length) {
-        final archived = next.past.first;
+      // The ledger ticks every 30 s but only deserves a prefs write
+      // when the story moved: a rollover archived, the total grew by a
+      // megabyte, or the day rolled over. Identical still-frames stay
+      // in memory only.
+      final archived = next.past.length > prev.past.length;
+      final moved =
+          (next.current?.usedMb ?? 0) - (prev.current?.usedMb ?? 0);
+      final newDay =
+          next.current?.lastAt.day != prev.current?.lastAt.day ||
+          next.current?.lastAt.month != prev.current?.lastAt.month;
+      if (archived || moved.abs() >= 1.0 || newDay) {
+        await next.save();
+      }
+      if (archived) {
+        final done = next.past.first;
         _logLine(
           'data counters reset — archived '
-          '${ZteClient.formatDataVolume(archived.usedMb)} (${archived.label})',
+          '${ZteClient.formatDataVolume(done.usedMb)} (${done.label})',
         );
       }
     } catch (_) {
       // A ledger write must never break the poll loop.
     }
+  }
+
+  /// Smart-alert toggles changed in Settings: refresh the cached copy
+  /// the poller tick evaluates, so the next tick already honors them.
+  Future<void> _refreshSmartSettings() async {
+    try {
+      _smartSettings = await SmartAlertStore.loadSettings();
+    } catch (_) {}
   }
 
   /// Usage page → alert line: persisted here, applied to the poller so
@@ -619,6 +673,67 @@ class _DashboardPageState extends State<DashboardPage>
       mb == null
           ? 'usage alert line removed'
           : 'usage alert line set: ${ZteClient.formatDataVolume(mb)}',
+    );
+  }
+
+  /// Balance-jump top-up detector: every fresh carrier snapshot passes
+  /// through here. An upward jump of at least half the plan quota reads
+  /// as a purchase — bought in-app over USSD or outside it, the modem
+  /// counter cannot tell, and the detector does not need to. The new
+  /// bundle adopts the jump size as its quota (snapped clean) and
+  /// carries the price over; the ledger re-baselines to the live
+  /// counter. First-ever snapshot only records — there is nothing to
+  /// compare against yet.
+  void _watchBalanceJump() {
+    final total = _balanceFeed.value?.totalMb;
+    if (total == null) return;
+    final prev = _lastBalanceMb;
+    _lastBalanceMb = total;
+    unawaited(_maybeAutoRenew(prev, total));
+  }
+
+  Future<void> _maybeAutoRenew(double? prev, double total) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('balance_last_total_mb', total);
+    } catch (_) {}
+    final plan = _planFeed.value;
+    if (!mounted || plan == null || prev == null) return;
+    if (!plan.isTopUpJump(prev, total)) return;
+    final jump = total - prev;
+    final quota = DataPlanState.snapQuota(jump);
+    final renewed = plan.logTopUp(
+      quotaMb: quota,
+      priceNaira: plan.priceNaira,
+      planName: DataPlanState.quotaLabel(quota),
+      liveUsedMb:
+          _usageFeed.value.current?.usedMb ?? plan.baselineMb,
+    );
+    await _setDataPlan(renewed);
+    _logLine(
+      'auto top-up: balance +${ZteClient.formatDataVolume(jump)} — '
+      'quota set from the jump',
+    );
+  }
+
+  /// Usage page → plan tracking: entered once, derived forever after.
+  /// Null retires tracking (the archive goes with it).
+  Future<void> _setDataPlan(DataPlanState? plan) async {    try {
+      if (plan == null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(DataPlanState.key);
+      } else {
+        await plan.save();
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    _planFeed.value = plan;
+    _logLine(
+      plan == null
+          ? 'plan tracking stopped'
+          : 'plan tracking: ${plan.carrier} ${plan.planName} '
+              '${ZteClient.formatDataVolume(plan.quotaMb)} / '
+              '${plan.validityDays}d',
     );
   }
 
@@ -885,8 +1000,7 @@ class _DashboardPageState extends State<DashboardPage>
     final p = _poller;
     if (p == null) return;
     try {
-      final ms = await MonitorSettings.load();
-      final want = monitorInterval(ms.mode);
+      final ms = await MonitorSettings.load();      final want = monitorInterval(ms.mode);
       p.lowBatteryPercent = ms.lowBatteryPercent;
       p.lowBatteryNotify = ms.lowBatteryNotify;
       p.fullBatteryNotify = ms.fullBatteryNotify;
@@ -912,11 +1026,45 @@ class _DashboardPageState extends State<DashboardPage>
 
   /// Fold background station snapshots into device intel (fire-and-
   /// forget; merges are cheap, prefs writes are not awaited by polls).
+  /// The live list is also published so the Status card renders renames
+  /// as they happen.
   Future<void> _deviceTick(List<AttachedDevice> stations) async {
+    _devicesFeed.value = stations;
     try {
       final store = await DeviceStore.load();
+      for (final s in stations) {
+        final known = store.known[s.mac];
+        if (known != null &&
+            known.lastHostname.isNotEmpty &&
+            s.hostname.isNotEmpty &&
+            known.lastHostname != s.hostname) {
+          _logLine(
+            'device renamed: ${known.lastHostname} → ${s.hostname}',
+          );
+        }
+      }
       final merged = store.merge(stations);
-      await merged.store.save();
+      // The merged store always refreshes lastSeen, but the disk only
+      // needs it when something actually differs: joins, leaves (even
+      // pending ones — a restart must not erase a pending leave),
+      // renames, or changed fields. Quiet 5-minute ticks stay in memory.
+      bool sameDevice(KnownDevice a, KnownDevice b) =>
+          a.lastHostname == b.lastHostname &&
+          a.lastIp == b.lastIp &&
+          a.missStreak == b.missStreak &&
+          a.customName == b.customName &&
+          a.important == b.important;
+      final rosterChanged =
+          merged.events.isNotEmpty ||
+          merged.store.known.length != store.known.length ||
+          merged.store.known.entries.any(
+            (e) =>
+                store.known[e.key] == null ||
+                !sameDevice(store.known[e.key]!, e.value),
+          );
+      if (rosterChanged) {
+        await merged.store.save();
+      }
       for (final e in merged.events.where((e) => !e.joined)) {
         final dev = merged.store.known[e.mac];
         if (dev != null && dev.important) {
@@ -932,7 +1080,8 @@ class _DashboardPageState extends State<DashboardPage>
   /// block the poll loop).
   Future<void> _smartTick(Map<String, dynamic> s) async {
     try {
-      final settings = await SmartAlertStore.loadSettings();
+      final settings =
+          _smartSettings ?? await SmartAlertStore.loadSettings();
       final fired = _alerts.tick(
         reachable: true,
         bars: int.tryParse('${s['signalbar'] ?? ''}'),
@@ -947,7 +1096,8 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _smartUnreachable() async {
     try {
-      final settings = await SmartAlertStore.loadSettings();
+      final settings =
+          _smartSettings ?? await SmartAlertStore.loadSettings();
       final fired = _alerts.tick(reachable: false, settings: settings);
       await _raiseSmartAlerts(fired);
     } catch (_) {}
@@ -1011,7 +1161,7 @@ class _DashboardPageState extends State<DashboardPage>
         enabled: diag.enabled,
         hour: diag.hour,
         autoSpeedTest: diag.autoSpeedTest,
-        lastRunDay: ScheduledDiag.dayKey(now),
+        lastRunDay: UsageHistory.dayKey(now),
       ).save();
     } catch (e) {
       _logLine('scheduled diagnostic failed: $e');
@@ -1110,6 +1260,7 @@ class _DashboardPageState extends State<DashboardPage>
         onJumpTab: (i) => setState(() => _tab = i),
         onOpenUsage: _openUsagePage,
         onUnsupported: _markUnsupported,
+        devicesFeed: _devicesFeed,
         ),
       ),
     );
@@ -1133,6 +1284,7 @@ class _DashboardPageState extends State<DashboardPage>
       connected: _connected,
       log: _logLine,
       onOpenUsage: _openUsagePage,
+      usageFeed: _usageFeed,
     ),
     SettingsTab(
       client: _client,
@@ -1158,6 +1310,7 @@ class _DashboardPageState extends State<DashboardPage>
       log: _logLine,
       notify: _notifyNow,
       onMonitorChanged: _applyMonitorSettings,
+      onSmartAlertsChanged: _refreshSmartSettings,
       onApiChanged: _applyLocalApi,
       onUnsupported: _markUnsupported,
     ),

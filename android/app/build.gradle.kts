@@ -46,6 +46,17 @@ android {
     }
 
     buildTypes {
+        // Personal sideload project: sign debug with the same committed
+        // keystore so `flutter run` installs OVER the release build
+        // (same cert -> update, data preserved) instead of failing with
+        // INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+        debug {
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             signingConfig = if (hasReleaseKeystore) {
                 signingConfigs.getByName("release")

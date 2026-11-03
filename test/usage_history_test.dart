@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:zte_mf935_app/core/data_plan.dart';
 import 'package:zte_mf935_app/core/theme.dart';
 import 'package:zte_mf935_app/core/usage_history.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
@@ -270,6 +271,9 @@ void main() {
       required ValueNotifier<UsageHistory> feed,
       ValueNotifier<double?>? alertFeed,
       void Function(double?)? onAlert,
+      ValueNotifier<DataPlanState?>? planFeed,
+      ValueNotifier<DataBalance?>? balanceFeed,
+      void Function(DataPlanState?)? onPlan,
     }) {
       SharedPreferences.setMockInitialValues({});
       return UsagePage(
@@ -278,6 +282,9 @@ void main() {
         usageFeed: feed,
         alertFeed: alertFeed ?? ValueNotifier<double?>(40 * 1024),
         onAlertChanged: onAlert ?? (_) {},
+        planFeed: planFeed ?? ValueNotifier<DataPlanState?>(null),
+        balanceFeed: balanceFeed ?? ValueNotifier<DataBalance?>(null),
+        onPlanChanged: onPlan ?? (_) {},
         onSample: (_, _, _) {},
         onClearHistory: () {},
         log: (_) {},
@@ -307,10 +314,10 @@ void main() {
       // Hero: big used number + the alert-line fraction.
       expect(find.text('90 MB'), findsOneWidget);
       expect(find.text('used'), findsOneWidget);
-      // Alert-line ring shows the fraction; month range on the pill
-      // and the hero overline.
+      // Alert-line ring shows the fraction; the pill and the hero
+      // overline both show the observed range, not the full month.
       expect(find.text('0%'), findsOneWidget);
-      expect(find.text('Oct 1 – 31'), findsWidgets);
+      expect(find.text('Oct 1 to 20'), findsWidgets);
       // Breakdown rows: down/up split.
       expect(find.text('Downloaded'), findsOneWidget);
       expect(find.text('Uploaded'), findsOneWidget);
@@ -388,6 +395,256 @@ void main() {
       expect(find.text('2.0 GB'), findsWidgets, reason: 'hero + history row both show it');
       expect(find.textContaining('of 40.0 GB'), findsNothing);
       expect(find.textContaining('ended Sep 30'), findsWidgets, reason: 'hero caption + history row');
+    });
+
+    test('trend skips the unknown first day for mid-cycle joins', () {
+      // Joined mid-cycle: day one's 10 MB predates tracking.
+      final mid = cycle(
+        usedMb: 90,
+        daily: const {
+          '2026-10-04': 10.0,
+          '2026-10-05': 25.0,
+          '2026-10-06': 90.0,
+        },
+        startKnown: false,
+      );
+      expect(mid.hasTrend, isTrue);
+      expect(mid.trendPerDayMb, 40);
+      expect(mid.projectedMb(), 40 * 31);
+      // Single observed day, unknown baseline: no measurable trend.
+      final one = cycle(
+        usedMb: 50,
+        daily: const {'2026-10-04': 50.0},
+        startKnown: false,
+      );
+      expect(one.hasTrend, isFalse);
+      // Witnessed start: day one owns its cumulative.
+      final known = cycle(
+        usedMb: 90,
+        daily: const {'2026-10-04': 10.0, '2026-10-05': 25.0},
+        startKnown: true,
+      );
+      expect(known.trendPerDayMb, 45);
+    });
+
+    testWidgets('plan card derives everything from one setup',
+        (tester) async {
+      final plan = DataPlanState(
+        carrier: 'Airtel',
+        name: 'SmartCash',
+        planName: '6.5 GB',
+        quotaMb: 6.5 * 1024,
+        validityDays: 13,
+        priceNaira: 1000,
+        startedAt: DateTime(2026, 10, 6, 8),
+        baselineMb: 0,
+      );
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+          planFeed: ValueNotifier<DataPlanState?>(plan),
+          balanceFeed: ValueNotifier<DataBalance?>(
+            DataBalance(
+              bundles: [
+                DataBundle(
+                  name: 'SmartCash',
+                  mb: 4300,
+                  expiry: DateTime.now().add(const Duration(days: 9)),
+                ),
+              ],
+              raw: 'raw',
+              fetchedAt: DateTime.now().subtract(const Duration(hours: 2)),
+            ),
+          ),
+        ),
+        const Size(980, 1800),
+      );
+      // 90 MB used of 6656: ~6.4 GB left, validity chip, pencil.
+      expect(find.text('PLAN'), findsOneWidget);
+      expect(find.textContaining('SmartCash'), findsOneWidget);
+      expect(find.textContaining('Airtel · 6.5 GB'), findsOneWidget);
+      expect(find.text('6.4 GB'), findsOneWidget);
+      expect(find.text('left'), findsOneWidget);
+      expect(find.text('Top up'), findsNothing);
+      expect(find.text('Edit'), findsNothing);
+      // Carrier cross-check is icon + value + age, nothing more.
+      expect(find.textContaining('4.2 GB'), findsOneWidget);
+      // Money reads as value left, mirroring the data figure.
+      expect(find.textContaining('≈₦986'), findsOneWidget);
+      expect(find.textContaining('of ₦1,000'), findsOneWidget);
+      // The pencil opens setup; MTN chip + save flow through.
+      // (First edit icon in tree order is the plan card's own.)
+      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Edit plan'), findsOneWidget);
+      await tester.tap(find.text('MTN'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('empty plan slot invites one-time setup', (tester) async {
+      DataPlanState? saved;
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+          onPlan: (p) => saved = p,
+        ),
+        const Size(980, 1800),
+      );
+      expect(find.text('Track a data plan'), findsOneWidget);
+      await tester.tap(find.text('Track a data plan'));
+      await tester.pumpAndSettle();
+      expect(find.text('Only what the modem cannot know'), findsOneWidget);
+      expect(find.text('9mobile'), findsOneWidget);
+      expect(find.text('Other'), findsOneWidget);
+      await tester.tap(find.text('Start tracking'));
+      await tester.pumpAndSettle();
+      expect(saved, isNotNull);
+      expect(saved!.carrier, 'Airtel');
+      expect(saved!.quotaMb, 6.5 * 1024);
+      expect(saved!.title, 'Data plan');
+    });
+
+    testWidgets('plan card collapses to a slim row and back',
+        (tester) async {
+      final plan = DataPlanState(
+        carrier: 'Airtel',
+        name: 'SmartCash',
+        planName: '6.5 GB',
+        quotaMb: 6.5 * 1024,
+        validityDays: 13,
+        priceNaira: 1000,
+        startedAt: DateTime.now().subtract(const Duration(days: 1)),
+        baselineMb: 0,
+      );
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+          planFeed: ValueNotifier<DataPlanState?>(plan),
+        ),
+        const Size(980, 1800),
+      );
+      expect(find.textContaining('On track'), findsOneWidget);
+      await tester.tap(find.byTooltip('Hide plan'));
+      await tester.pumpAndSettle();
+      // Slim row: name + value, verdict and bar folded away.
+      expect(find.textContaining('SmartCash'), findsWidgets);
+      expect(find.textContaining('On track'), findsNothing);
+      await tester.tap(find.byTooltip('Show plan'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('On track'), findsOneWidget);
+    });
+
+    testWidgets('hero caption prices the current cycle', (tester) async {
+      final plan = DataPlanState(
+        carrier: 'Airtel',
+        name: 'SmartCash',
+        planName: '6.5 GB',
+        quotaMb: 6.5 * 1024,
+        validityDays: 13,
+        priceNaira: 1000,
+        startedAt: DateTime.now().subtract(const Duration(days: 1)),
+        baselineMb: 0,
+      );
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+          planFeed: ValueNotifier<DataPlanState?>(plan),
+        ),
+        const Size(980, 1800),
+      );
+      // 90 MB at ₦1000 per 6.5 GB lands on ≈₦14 for the cycle so far.
+      expect(find.textContaining('≈₦14 this cycle'), findsOneWidget);
+    });
+
+    testWidgets('plan + balance + sheets survive realistic data',
+        (tester) async {
+      DataPlanState? saved;
+      final plan = DataPlanState(
+        carrier: 'Airtel',
+        name: 'SmartCash',
+        planName: '6.5 GB',
+        quotaMb: 6.5 * 1024,
+        validityDays: 13,
+        priceNaira: 1000,
+        startedAt: DateTime.now().subtract(const Duration(days: 3)),
+        baselineMb: 0,
+      );
+      final balance = DataBalance(
+        bundles: [
+          DataBundle(
+            name: 'SmartCash',
+            mb: 4300,
+            expiry: DateTime.now().add(const Duration(days: 9)),
+          ),
+        ],
+        raw: 'raw',
+        fetchedAt: DateTime.now().subtract(const Duration(hours: 2)),
+      );
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+          planFeed: ValueNotifier<DataPlanState?>(plan),
+          balanceFeed: ValueNotifier<DataBalance?>(balance),
+          onPlan: (p) => saved = p,
+        ),
+        const Size(980, 1800),
+      );
+      // Verdict derives from the measured trend, carrier row cross-checks.
+      expect(find.textContaining('On track'), findsOneWidget);
+      expect(find.textContaining('Carrier says'), findsNothing);
+      expect(find.textContaining('4.2 GB'), findsOneWidget);
+      // Bottom sheet opens with spend + months + lifetime estimate.
+      await tester.tap(find.text('All time'));
+      await tester.pumpAndSettle();
+      expect(find.text('BY MONTH'), findsOneWidget);
+      expect(find.text('Spent on bundles'), findsOneWidget);
+      expect(find.text('Est. lifetime cost'), findsOneWidget);
+      // September's 2.0 GB prices itself at the plan rate.
+      expect(find.textContaining('≈₦308'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('BY MONTH'), findsNothing);
+      // Pencil opens setup; swapping the carrier chip saves through.
+      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('MTN'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(saved!.carrier, 'MTN');
+      expect(saved!.name, 'SmartCash');
+    });
+
+    testWidgets('all-time totals open the full breakdown', (tester) async {
+      await pump(
+        tester,
+        page(
+          feed: ValueNotifier<UsageHistory>(seeded),
+          alertFeed: ValueNotifier<double?>(null),
+        ),
+        const Size(980, 1800),
+      );
+      await tester.tap(find.text('All time'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Every megabyte this app has seen'),
+        findsOneWidget,
+      );
+      expect(find.text('BY MONTH'), findsOneWidget);
+      expect(find.text('Monthly average'), findsOneWidget);
+      expect(find.textContaining('Biggest'), findsOneWidget);
     });
   });
 }

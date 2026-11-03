@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -64,6 +65,11 @@ class StatusTab extends StatefulWidget {
   /// Null-safe: tiles stay static when the shell doesn't provide it.
   final void Function(int tab)? onJumpTab;
 
+  /// Published station snapshots: the poller merges these into device
+  /// intel every few minutes, and the card below renders them live —
+  /// renames included — instead of waiting for a manual refresh.
+  final ValueListenable<List<AttachedDevice>>? devicesFeed;
+
   /// Open the full-screen data-usage page (from the hero metric strip).
   final VoidCallback? onOpenUsage;
 
@@ -89,6 +95,7 @@ class StatusTab extends StatefulWidget {
     this.onJumpTab,
     this.onOpenUsage,
     this.onUnsupported,
+    this.devicesFeed,
   });
 
   @override
@@ -114,6 +121,7 @@ class StatusTabState extends State<StatusTab> {
   void initState() {
     super.initState();
     _loadCached();
+    widget.devicesFeed?.addListener(_onDevicesTick);
     if (widget.connected) _onConnect();
   }
 
@@ -130,8 +138,20 @@ class StatusTabState extends State<StatusTab> {
 
   @override
   void dispose() {
+    widget.devicesFeed?.removeListener(_onDevicesTick);
     _balanceTimer?.cancel();
     super.dispose();
+  }
+
+  /// Poller station snapshot: render it live (renames included) instead
+  /// of waiting for a manual refresh.
+  void _onDevicesTick() {
+    final feed = widget.devicesFeed;
+    if (feed == null || !mounted) return;
+    setState(() {
+      _devices = feed.value;
+      _devicesAt = DateTime.now();
+    });
   }
 
   void _onConnect() {
@@ -227,7 +247,7 @@ class StatusTabState extends State<StatusTab> {
       if (left.isNegative && left.inDays > -2) {
         _expiryNotified.add(key);
         await widget.notify(
-          'MF935: ${bundle.name} expired',
+          'Data expired: ${bundle.name}',
           'It ran out on ${_fmtDate(exp)}.',
         );
       } else if (!left.isNegative && left.inHours <= 48) {
@@ -236,7 +256,7 @@ class StatusTabState extends State<StatusTab> {
             ? 'in ${left.inDays}d'
             : 'in ${left.inHours}h';
         await widget.notify(
-          'MF935: ${bundle.name} expires $when',
+          'Data expires $when: ${bundle.name}',
           '${ZteClient.formatDataVolume(bundle.mb)} left till ${_fmtDate(exp)}.',
         );
       }
@@ -342,6 +362,7 @@ class StatusTabState extends State<StatusTab> {
           probe: widget.probe ?? IoInternetProbe(),
           log: widget.log,
           onResult: widget.onProbeResult,
+          balanceBusy: _balanceBusy,
         ),
         const SizedBox(height: 10),
         // Connected devices: always fully expanded — the height cap and

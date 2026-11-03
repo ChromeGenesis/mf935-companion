@@ -191,8 +191,9 @@ class _SmsTabState extends State<SmsTab> {
       widget.log('delete failed: $e');
     }
     if (!mounted) return;
+    final gone = ids.toSet();
     setState(() {
-      _msgs.removeWhere((m) => ids.contains(m.id));
+      _msgs.removeWhere((m) => gone.contains(m.id));
       _selected.removeAll(ids);
       if (_selected.isEmpty) _selecting = false;
     });

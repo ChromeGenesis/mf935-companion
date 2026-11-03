@@ -148,32 +148,32 @@ class _SpeedTestCardState extends State<SpeedTestCard> {
     final record = _lastRecord;
     if (record == null) return;
     final ctrl = TextEditingController(text: record.label);
-    final label = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Name this test'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'e.g. bedroom window',
-            isDense: true,
-          ),
-          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+    final label = await showGlassModal<String>(
+      context,
+      icon: Icons.label_outlined,
+      title: 'Name this test',
+      body: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'e.g. bedroom window',
+          isDense: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
+        onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
       ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
     );
-    ctrl.dispose();
+    // NOTE: no ctrl.dispose() — the pop transition still owns the
+    // focused field for a frame after the future completes.
     if (label == null || !mounted) return;
     final history = await SpeedHistory.load();
     final renamed = SpeedHistory([

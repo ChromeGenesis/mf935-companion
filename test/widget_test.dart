@@ -19,6 +19,7 @@ import 'package:zte_mf935_app/core/speed_history.dart';
 import 'package:zte_mf935_app/core/speed_test.dart';
 import 'package:zte_mf935_app/core/theme.dart';
 import 'package:zte_mf935_app/core/widgets.dart';
+import 'package:zte_mf935_app/core/usage_history.dart';
 import 'package:zte_mf935_app/features/status_tab.dart';
 import 'package:zte_mf935_app/features/ussd_tab.dart';
 import 'package:zte_mf935_app/core/zte_client.dart';
@@ -749,6 +750,28 @@ void main() {
     expect(DeviceStore.decode(null).events, isEmpty);
   });
 
+  test('Device store: rename on sight updates the record', () {
+    AttachedDevice dev(String mac, [String host = 'h']) => AttachedDevice(
+      mac: mac,
+      hostname: host,
+      ip: '192.168.0.2',
+    );
+    final t0 = DateTime(2026, 1, 1, 12, 0);
+    var m = const DeviceStore().merge(
+      [dev('AA', 'laptop')],
+      now: t0,
+    );
+    // Same MAC, new hostname: the record follows the rename, no
+    // join/leave noise — the card renders the live value.
+    m = m.store.merge(
+      [dev('AA', 'renamed-laptop')],
+      now: t0.add(const Duration(minutes: 5)),
+    );
+    expect(m.events, isEmpty);
+    expect(m.store.known['AA']!.lastHostname, 'renamed-laptop');
+    expect(m.store.present().single.lastHostname, 'renamed-laptop');
+  });
+
   test('Monitor settings decode + drain math', () {
     expect(const MonitorSettings().mode, MonitorMode.desk);
     expect(monitorInterval(MonitorMode.travel), const Duration(seconds: 90));
@@ -864,7 +887,7 @@ void main() {
       ),
       isFalse,
     );
-    expect(ScheduledDiag.dayKey(DateTime(2026, 3, 4, 5, 6)), '2026-03-04');
+    expect(UsageHistory.dayKey(DateTime(2026, 3, 4, 5, 6)), '2026-03-04');
 
     // One-shot reboot: due from its time on, disarmed when empty.
     final rb = ScheduledReboot(at: DateTime(2026, 1, 1, 12, 0));

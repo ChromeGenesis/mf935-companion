@@ -1,18 +1,22 @@
 library;
 
-/// Data-usage page (SSOT): full-screen route in the One UI idiom — a
-/// cycle-range selector, one big "used" number, a cumulative area chart
-/// with 50%/100% gridlines, a down/up breakdown list, and the archived
-/// months as tappable rows that re-aim the whole page at that cycle.
-/// Opened from the Status hero's metric strip and the Info tab's traffic
-/// statistics — deliberately NOT a nav tab.
+/// Data-usage page (SSOT): full-screen route in the One UI idiom: a
+/// cycle-range selector, one big "used" number, a plan card (bought vs
+/// used, derived automatically), a cumulative area chart with a labeled
+/// forecast, and the archived months as tappable rows that re-aim the
+/// whole page at that cycle. An all-time breakdown opens from the
+/// totals footer. Opened from the Status hero's metric strip and the
+/// Info tab's traffic statistics — deliberately NOT a nav tab.
 ///
-/// Numbers come from the persisted [UsageHistory] feed (poller-fed);
+/// Numbers come from the persisted [UsageHistory] feed (poller-fed)
+/// plus the [DataPlanState] feed (entered once, derived forever);
 /// pull-to-refresh samples the counters directly.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/data_plan.dart';
 import '../core/theme.dart';
 import '../core/usage_history.dart';
 import '../core/widgets.dart';
@@ -26,6 +30,12 @@ class UsagePage extends StatefulWidget {
   /// The alert line (MB) — also the poller's low-data threshold.
   final ValueListenable<double?> alertFeed;
   final ValueChanged<double?> onAlertChanged;
+
+  /// Plan tracking (entered once, derived forever after) + the
+  /// carrier balance snapshot for the plan card's cross-check.
+  final ValueListenable<DataPlanState?> planFeed;
+  final ValueListenable<DataBalance?> balanceFeed;
+  final ValueChanged<DataPlanState?> onPlanChanged;
 
   /// Feed one manual-refresh sample into the ledger (same path the
   /// poller uses), so pull-to-refresh updates everything at once.
@@ -42,6 +52,9 @@ class UsagePage extends StatefulWidget {
     required this.usageFeed,
     required this.alertFeed,
     required this.onAlertChanged,
+    required this.planFeed,
+    required this.balanceFeed,
+    required this.onPlanChanged,
     required this.onSample,
     required this.onClearHistory,
     required this.log,
@@ -54,9 +67,35 @@ class UsagePage extends StatefulWidget {
 class _UsagePageState extends State<UsagePage> {
   bool _busy = false;
 
+  /// Nigeria's carriers today, with room for whatever comes next via
+  /// the "Other" slot in the plan setup sheet.
+  static const carriers = ['Airtel', 'MTN', 'Glo', '9mobile'];
+
   /// 0 = the live cycle, 1..n = past[ n - 1 ]. Tapping a history row
   /// re-aims the whole page (hero, chart, breakdown) at that month.
   int _selected = 0;
+
+  /// Plan card folded away. Persisted — a hidden card stays hidden
+  /// across visits until asked back.
+  bool _planCollapsed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      final collapsed = prefs.getBool('plan_collapsed') ?? false;
+      if (mounted && collapsed != _planCollapsed) {
+        setState(() => _planCollapsed = collapsed);
+      }
+    });
+  }
+
+  void _togglePlanCollapsed() {
+    setState(() => _planCollapsed = !_planCollapsed);
+    SharedPreferences.getInstance().then(
+      (prefs) => prefs.setBool('plan_collapsed', _planCollapsed),
+    );
+  }
 
   Future<void> _refresh() async {
     if (!widget.connected || _busy) return;
@@ -123,7 +162,7 @@ class _UsagePageState extends State<UsagePage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${shortDate(entries[i].$2.startedAt)} – '
+                            '${shortDate(entries[i].$2.startedAt)} to '
                             '${shortDate(entries[i].$2.lastAt)}',
                             style: TextStyle(
                               color: _selected == entries[i].$1
@@ -256,6 +295,10 @@ class _UsagePageState extends State<UsagePage> {
         ),
       ],
     );
+    // NOTE: no ctrl.dispose() here — the pop transition still owns the
+    // focused field for a frame after the future completes; disposing
+    // synchronously crashes with "used after being disposed". The
+    // dialog-local controller is garbage-collected with the route.
     if (res == null || !res.save) return;
     widget.onAlertChanged(res.mb);
   }
@@ -317,38 +360,67 @@ class _UsagePageState extends State<UsagePage> {
                             final view = _selected == 0
                                 ? live
                                 : past[_selected - 1];
-                            return ValueListenableBuilder<double?>(
-                              valueListenable: widget.alertFeed,
-                              builder: (context, alertMb, _) => Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (past.isNotEmpty || live != null)
-                                    _cyclePill(live, past),
-                                  const SizedBox(height: 10),
-                                  _heroCard(view, alertMb),
-                                  const SizedBox(height: 12),
-                                  _chartCard(view),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Measured by the MiFi monthly counter. '
-                                    'It resets at each billing rollover — '
-                                    'finished months are archived below.',
-                                    style: TextStyle(
-                                      color: c.textMuted,
-                                      fontSize: 11.5,
-                                      height: 1.45,
-                                    ),
+                            // Per-card listeners: a balance or alert tick only
+                            // rebuilds the cards that read it. The whole
+                            // page used to rebuild on every feed change,
+                            // re-running the chart parse + history rows
+                            // for a single alert-line tap.
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (past.isNotEmpty || live != null)
+                                  _cyclePill(live, past),
+                                const SizedBox(height: 10),
+                                ValueListenableBuilder<double?>(
+                                  valueListenable: widget.alertFeed,
+                                  builder: (context, alertMb, _) =>
+                                      ValueListenableBuilder<DataPlanState?>(
+                                    valueListenable: widget.planFeed,
+                                    builder: (context, plan, _) =>
+                                        _heroCard(view, alertMb, plan),
                                   ),
-                                  const SizedBox(height: 14),
-                                  if (past.isNotEmpty) ...[
-                                    const SectionLabel('Previous months'),
-                                    _historyCard(past),
-                                    const SizedBox(height: 12),
-                                  ],
-                                  _alertCard(alertMb),
-                                ],
-                              ),
+                                ),
+                                const SizedBox(height: 12),
+                                ValueListenableBuilder<DataPlanState?>(
+                                  valueListenable: widget.planFeed,
+                                  builder: (context, plan, _) =>
+                                      ValueListenableBuilder<DataBalance?>(
+                                    valueListenable: widget.balanceFeed,
+                                    builder: (context, balance, _) =>
+                                        _planCard(plan, usage, balance),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                _chartCard(view),
+                                const SizedBox(height: 12),
+                                ValueListenableBuilder<DataPlanState?>(
+                                  valueListenable: widget.planFeed,
+                                  builder: (context, plan, _) => Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (past.isNotEmpty ||
+                                          live != null) ...[
+                                        _allTimeEntry(usage, plan),
+                                        const SizedBox(height: 12),
+                                      ],
+                                      if (past.isNotEmpty) ...[
+                                        const SectionLabel(
+                                            'Previous months'),
+                                        _historyCard(past),
+                                        const SizedBox(height: 12),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                ValueListenableBuilder<double?>(
+                                  valueListenable: widget.alertFeed,
+                                  builder: (context, alertMb, _) =>
+                                      _alertCard(alertMb),
+                                ),
+                              ],
                             );
                           },
                         ),
@@ -364,25 +436,28 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  // ── Cycle selector pill ("Oct 1 – 31 ▾") ──────────────────────────
+  // ── Cycle selector pill ("Oct 1 to 20") ──────────────────────────
 
-  /// 'Oct 3 – 31' within one month, 'Sep 28 – Oct 27' across months.
+  /// 'Oct 1 to 20' within one month, 'Sep 28 to Oct 27' across months.
+  /// A single observed day collapses to one date ('Nov 3').
   String _rangeLabel(DateTime a, DateTime b) {
-    if (a.year == b.year && a.month == b.month) {
-      return '${monthAbbr(a)} ${a.day} – ${b.day}';
+    if (a.year == b.year && a.month == b.month && a.day == b.day) {
+      return shortDate(a);
     }
-    return '${shortDate(a)} – ${shortDate(b)}';
+    if (a.year == b.year && a.month == b.month) {
+      return '${monthAbbr(a)} ${a.day} to ${b.day}';
+    }
+    return '${shortDate(a)} to ${shortDate(b)}';
   }
 
   Widget _cyclePill(CycleUsage? live, List<CycleUsage> past) {
     final c = context.zc;
     String range(int index) {
       final cy = index == 0 ? live! : past[index - 1];
-      // The live cycle spans its calendar month even before the first
-      // sample exists — "Oct 31 – Oct 31" on day one reads as broken.
-      final start = index == 0 ? monthStart(cy.startedAt) : cy.startedAt;
-      final end = index == 0 ? monthEnd(cy.startedAt) : cy.lastAt;
-      return _rangeLabel(start, end);
+      // The live pill shows what has actually been observed so far
+      // ("Nov 1 to 3"), matching the picker and the hero — never the
+      // full billing window, which lives on the chart axis instead.
+      return _rangeLabel(cy.startedAt, cy.lastAt);
     }
 
     // A cleared ledger can leave the selection pointing at "live" while
@@ -423,7 +498,7 @@ class _UsagePageState extends State<UsagePage> {
 
   // ── Hero: the screenshot card ─────────────────────────────────────
 
-  Widget _heroCard(CycleUsage? view, double? alertMb) {
+  Widget _heroCard(CycleUsage? view, double? alertMb, DataPlanState? plan) {
     final c = context.zc;
     if (view == null) {
       return GlassCard(
@@ -434,7 +509,7 @@ class _UsagePageState extends State<UsagePage> {
             icon: Icons.data_usage,
             title: 'No usage observed yet',
             subtitle: 'The ledger fills as the poller samples the '
-                'modem — log in to start tracking.',
+                'modem: log in to start tracking.',
           ),
         ),
       );
@@ -443,15 +518,18 @@ class _UsagePageState extends State<UsagePage> {
     final showAlert = isLive && alertMb != null && alertMb > 0;
     final frac = showAlert ? (view.usedMb / alertMb).clamp(0.0, 1.0) : null;
     final ringColor = frac != null && frac >= 0.9 ? c.danger : c.accentText;
-    final range = isLive
-        ? _rangeLabel(monthStart(view.startedAt), monthEnd(view.startedAt))
-        : _rangeLabel(view.startedAt, view.lastAt);
+    final range = _rangeLabel(view.startedAt, view.lastAt);
 
-    // One muted caption carries the numbers that only mean something
-    // once the cycle has a couple of days behind it.
+    // One muted caption: freshness for the live cycle, day count for
+    // archives, the end-of-month projection once two days are in, and
+    // the month's estimated cost whenever a plan prices it.
+    final monthSpend = plan?.priceNaira != null && plan!.quotaMb > 0
+        ? view.usedMb / plan.quotaMb * plan.priceNaira!
+        : null;
     final caption = StringBuffer();
     if (isLive) {
-      caption.write('sampled ${_ago(view.lastAt)}');
+      final ago = ZteClient.timeAgo(view.lastAt);
+      caption.write(ago == 'just now' ? 'Just now' : 'sampled $ago');
     } else {
       caption.write(
         'ended ${shortDate(view.lastAt)} · '
@@ -459,10 +537,14 @@ class _UsagePageState extends State<UsagePage> {
         'with data',
       );
     }
-    if (view.daysObserved >= 2) {
+    if (isLive && view.hasTrend) {
       caption.write(
-        ' · avg ${ZteClient.formatDataVolume(view.avgPerDayMb)}/day'
-        ' · projects ~${ZteClient.formatDataVolume(view.projectedMb())}',
+        ' · on pace for ${ZteClient.formatDataVolume(view.projectedMb())}',
+      );
+    }
+    if (monthSpend != null) {
+      caption.write(
+        ' · ≈${formatNaira(monthSpend)}${isLive ? ' this cycle' : ''}',
       );
     }
 
@@ -654,22 +736,7 @@ class _UsagePageState extends State<UsagePage> {
           ],
         ),
         const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: SizedBox(
-            height: 4,
-            child: Stack(
-              children: [
-                Container(color: c.textMuted.withAlpha(34)),
-                FractionallySizedBox(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: (mb / maxSide).clamp(0.02, 1.0),
-                  child: Container(color: color),
-                ),
-              ],
-            ),
-          ),
-        ),
+        ShareBar(fraction: mb / maxSide, color: color),
         const SizedBox(height: 4),
         Text(
           label,
@@ -693,17 +760,54 @@ class _UsagePageState extends State<UsagePage> {
     }
     if (points.isEmpty) return const SizedBox.shrink();
     final isLive = _selected == 0;
-    // The x-domain is the billing window, not the sampled days — the
+    // The x-domain is the billing window, not the sampled days, so the
     // curve sits proportionally in its month from day one, One UI
     // style. The live cycle also gets a dashed month-end projection.
     final domainStart = isLive ? monthStart(view.startedAt) : view.startedAt;
     final domainEnd = isLive ? monthEnd(view.startedAt) : view.lastAt;
+    // A few evenly spaced ticks: more context than start/end alone,
+    // still quiet at a glance.
+    final span = domainEnd.difference(domainStart).inDays;
+    final tickOffsets = <int>{
+      0,
+      (span / 3).round(),
+      (2 * span / 3).round(),
+      span < 1 ? 1 : span,
+    }.toList()..sort();
     return GlassCard(
       padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (isLive)
+            Padding(
+              padding: const EdgeInsets.only(right: 6, bottom: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.auto_graph, size: 13, color: c.textMuted),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Forecast',
+                    style: TextStyle(color: c.textMuted, fontSize: 11),
+                  ),
+                  const Spacer(),
+                  Text(
+                    view.hasTrend
+                        ? ZteClient.formatDataVolume(view.projectedMb())
+                        : 'one more day',
+                    style: TextStyle(
+                      color: view.hasTrend ? c.accentText : c.textMuted,
+                      fontSize: 11.5,
+                      fontWeight: view.hasTrend
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           SizedBox(
             width: double.infinity,
             height: 190,
@@ -712,7 +816,9 @@ class _UsagePageState extends State<UsagePage> {
                 points: points,
                 domainStart: domainStart,
                 domainEnd: domainEnd,
-                projectedEndMb: isLive ? view.projectedMb() : null,
+                projectedEndMb: isLive && view.hasTrend
+                    ? view.projectedMb()
+                    : null,
                 line: c.accent,
                 fillTop: c.accent.withAlpha(96),
                 fillBottom: c.accent.withAlpha(10),
@@ -724,29 +830,15 @@ class _UsagePageState extends State<UsagePage> {
           ),
           const SizedBox(height: 4),
           Padding(
-            padding: const EdgeInsets.only(right: 34),
+            padding: const EdgeInsets.only(left: 4, right: 34),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  shortDate(domainStart),
-                  style: TextStyle(color: c.textMuted, fontSize: 11),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.trending_flat,
-                      size: 13,
-                      color: c.textMuted.withAlpha(150),
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      shortDate(domainEnd),
-                      style: TextStyle(color: c.textMuted, fontSize: 11),
-                    ),
-                  ],
-                ),
+                for (final t in tickOffsets)
+                  Text(
+                    shortDate(domainStart.add(Duration(days: t))),
+                    style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                  ),
               ],
             ),
           ),
@@ -763,7 +855,6 @@ class _UsagePageState extends State<UsagePage> {
       1.0,
       (m, cy) => cy.usedMb > m ? cy.usedMb : m,
     );
-    final total = past.fold<double>(0, (a, cy) => a + cy.usedMb);
     return GlassCard(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       child: Column(
@@ -786,12 +877,12 @@ class _UsagePageState extends State<UsagePage> {
               children: [
                 Expanded(
                   child: Text(
-                    '${past.length} month${past.length == 1 ? '' : 's'} '
-                    'tracked · ${ZteClient.formatDataVolume(total)} total',
+                    '${past.length} archived month${past.length == 1 ? '' : 's'}',
                     style: TextStyle(color: c.textMuted, fontSize: 11),
                   ),
                 ),
-                TextButton(
+                IconButton(
+                  tooltip: 'Clear archived months',
                   onPressed: () async {
                     final ok = await confirmAction(
                       context,
@@ -805,12 +896,92 @@ class _UsagePageState extends State<UsagePage> {
                     );
                     if (ok) widget.onClearHistory();
                   },
-                  child: const Text('Clear'),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 17,
+                    color: c.textMuted,
+                  ),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// All-time entry: its own tappable row with a proper home above the
+  /// archive, far from the delete button.
+  Widget _allTimeEntry(UsageHistory usage, DataPlanState? plan) {
+    final c = context.zc;
+    final past = usage.past;
+    final live = usage.current;
+    final total =
+        past.fold<double>(0, (a, cy) => a + cy.usedMb) + (live?.usedMb ?? 0);
+    final cycles = past.length + (live != null ? 1 : 0);
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: InkWell(
+        onTap: () => _openAllTime(usage, plan),
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: c.accent.withAlpha(22),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: c.accent.withAlpha(56)),
+                ),
+                child: Icon(
+                  Icons.all_inclusive,
+                  size: 15,
+                  color: c.accentText,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'All time',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      '$cycles cycle${cycles == 1 ? '' : 's'} on record',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textMuted, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                ZteClient.formatDataVolume(total),
+                style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right, size: 15, color: c.textMuted),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -836,7 +1007,7 @@ class _UsagePageState extends State<UsagePage> {
               Expanded(
                 child: Text(
                   alertMb == null
-                      ? 'No alert line — tap to set one'
+                      ? 'No alert line yet'
                       : 'Alert at ${ZteClient.formatDataVolume(alertMb)}',
                   style: TextStyle(
                     color: c.textSecondary,
@@ -853,12 +1024,984 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  String _ago(DateTime t) {
-    final d = DateTime.now().difference(t);
-    if (d.inSeconds < 90) return 'just now';
-    if (d.inMinutes < 60) return '${d.inMinutes} min ago';
-    if (d.inHours < 24) return '${d.inHours}h ago';
-    return '${d.inDays}d ago';
+  // ── Data plan: bought vs used ────────────────────────────────────
+  // The plan is entered once; everything here derives automatically:
+  // consumption from the ledger (rollover-safe), burn from its daily
+  // trend, days from the clock, and the carrier's own remaining from
+  // the last balance snapshot.
+
+  String _gbLabel(double gb) => DataPlanState.quotaLabel(gb * 1024);
+
+  String _gbValue(double mb) => DataPlanState.quotaFieldValue(mb);
+
+  Widget _planCard(
+    DataPlanState? plan,
+    UsageHistory usage,
+    DataBalance? balance,
+  ) {
+    if (plan == null) return _planEmptyCard(usage);
+    final c = context.zc;
+    final now = DateTime.now();
+    final live = usage.current;
+    final ledger = plan.ledgerNow(live?.usedMb ?? plan.baselineMb, usage.past);
+    final left = plan.remainingMb(ledger).clamp(0.0, double.infinity);
+    final burn = (live != null && live.hasTrend) ? live.trendPerDayMb : 0.0;
+    final v = plan.verdict(ledger, burn, now);
+    final emptyDays = plan.daysUntilEmpty(ledger, burn);
+
+    final Color vColor = switch (v) {
+      PlanVerdict.onTrack => c.live,
+      PlanVerdict.burningFast => c.accentText,
+      PlanVerdict.exhausted => c.danger,
+      PlanVerdict.expired => c.textMuted,
+      PlanVerdict.warmingUp => c.textMuted,
+    };
+    final IconData vIcon = switch (v) {
+      PlanVerdict.onTrack => Icons.check_circle_outline,
+      PlanVerdict.burningFast => Icons.error_outline,
+      PlanVerdict.exhausted => Icons.cloud_off_outlined,
+      PlanVerdict.expired => Icons.event_busy_outlined,
+      PlanVerdict.warmingUp => Icons.hourglass_empty_outlined,
+    };
+    final String vText = switch (v) {
+      PlanVerdict.onTrack => 'On track',
+      PlanVerdict.burningFast => () {
+        final out = now.add(
+          Duration(hours: ((emptyDays ?? 0) * 24).round()),
+        );
+        final early = plan.daysLeft(now) - (emptyDays ?? 0).ceil();
+        return early <= 0
+            ? 'Dry as validity ends'
+            : 'Dry ${shortDate(out)} · $early day${early == 1 ? '' : 's'} early';
+      }(),
+      PlanVerdict.exhausted => 'Bundle exhausted',
+      PlanVerdict.expired => left > 0
+          ? 'Expired · ${ZteClient.formatDataVolume(left)} unused'
+          : 'Expired',
+      PlanVerdict.warmingUp => 'Reading your pace',
+    };
+
+    final daysLeft = plan.daysLeft(now);
+    final Color chipColor = daysLeft < 0
+        ? c.danger
+        : daysLeft <= 3
+            ? c.accentText
+            : c.textMuted;
+
+    if (_planCollapsed) {
+      return GlassCard(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        child: InkWell(
+          onTap: _togglePlanCollapsed,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.sim_card_outlined,
+                  size: 14,
+                  color: c.accentText,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    plan.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Text(
+                  ZteClient.formatDataVolume(left),
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'left',
+                  style: TextStyle(color: c.textMuted, fontSize: 11),
+                ),
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: 'Show plan',
+                  child: Icon(
+                    Icons.expand_more,
+                    size: 16,
+                    color: c.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return GlassCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'PLAN',
+                style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 2,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: chipColor.withAlpha(28),
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: chipColor.withAlpha(90)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.schedule, size: 11, color: chipColor),
+                    const SizedBox(width: 4),
+                    Text(
+                      daysLeft < 0
+                          ? 'expired'
+                          : daysLeft == 0
+                              ? 'ends today'
+                              : '$daysLeft day${daysLeft == 1 ? '' : 's'} left',
+                      style: TextStyle(
+                        color: chipColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: () => _showPlanSheet(plan, usage),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.edit_outlined,
+                    size: 14,
+                    color: c.textMuted,
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: _togglePlanCollapsed,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Tooltip(
+                    message: 'Hide plan',
+                    child: Icon(
+                      Icons.expand_less,
+                      size: 16,
+                      color: c.textMuted,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: plan.title,
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (plan.carrier.isNotEmpty || plan.planName.isNotEmpty)
+                  TextSpan(
+                    text:
+                        '  ·  ${[
+                      if (plan.carrier.isNotEmpty) plan.carrier,
+                      if (plan.planName.isNotEmpty) plan.planName,
+                    ].join(' · ')}',
+                    style: TextStyle(
+                      color: c.textMuted,
+                      fontSize: 11.5,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      ZteClient.formatDataVolume(left),
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 34,
+                        height: 1.0,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    'left',
+                    style: TextStyle(
+                      color: c.textMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              if (plan.priceNaira != null)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '≈${formatNaira(plan.priceNaira! * (1 - plan.fracUsed(ledger).clamp(0.0, 1.0)))}',
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const [
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      'of ${formatNaira(plan.priceNaira!)}',
+                      style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Carrier tick: where the carrier's own remaining puts
+          // consumption on the same bar. Agreement is visible; drift
+          // is visible.
+          ShareBar(
+            fraction: plan.fracUsed(ledger),
+            color: vColor,
+            height: 6,
+            markerFraction: balance != null &&
+                    balance.totalMb > 0 &&
+                    plan.quotaMb > 0
+                ? (plan.quotaMb - balance.totalMb) / plan.quotaMb
+                : null,
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Icon(vIcon, size: 13, color: vColor),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  vText,
+                  style: TextStyle(
+                    color: c.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (balance != null && balance.totalMb > 0) ...[
+                const SizedBox(width: 10),
+                Text(
+                  '${ZteClient.formatDataVolume(balance.totalMb)} · '
+                  '${ZteClient.timeAgo(balance.fetchedAt)}',
+                  style: TextStyle(color: c.textMuted, fontSize: 11),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// No plan yet: one quiet entry point. Everything after setup is
+  /// automatic — the ledger, the clock and the carrier do the rest.
+  Widget _planEmptyCard(UsageHistory usage) {
+    final c = context.zc;
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: InkWell(
+        onTap: () => _showPlanSheet(null, usage),
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              Icon(Icons.sim_card_outlined, size: 16, color: c.accentText),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Track a data plan',
+                      style: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      'One setup, then it runs itself',
+                      style: TextStyle(color: c.textMuted, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.add, size: 15, color: c.textMuted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Enter (or revise) the plan. Quota, validity and price are the only
+  /// things the modem can never know, so they are the only things asked.
+  Future<void> _showPlanSheet(DataPlanState? existing, UsageHistory usage) {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final customCarrierCtrl = TextEditingController();
+    var selectedCarrier = 'Airtel';
+    final preset = DataPlanState.airtelPreset();
+    if (existing != null) {
+      if (carriers.contains(existing.carrier)) {
+        selectedCarrier = existing.carrier;
+      } else if (existing.carrier.isNotEmpty) {
+        selectedCarrier = 'Other';
+        customCarrierCtrl.text = existing.carrier;
+      }
+    }
+    final quotaCtrl = TextEditingController(
+      text: existing != null ? _gbValue(existing.quotaMb) : '6.5',
+    );
+    final daysCtrl = TextEditingController(
+      text: '${existing?.validityDays ?? 13}',
+    );
+    final priceCtrl = TextEditingController(
+      text: existing?.priceNaira?.toStringAsFixed(0) ?? '1000',
+    );
+    return showGlassModal<void>(
+      context,
+      icon: Icons.sim_card_outlined,
+      title: existing == null ? 'Track a data plan' : 'Edit plan',
+      subtitle: 'Only what the modem cannot know',
+      body: StatefulBuilder(
+        builder: (ctx, setModal) {
+          void usePreset() => setModal(() {
+                nameCtrl.text = preset.name;
+                selectedCarrier = preset.carrier;
+                quotaCtrl.text = _gbValue(preset.quotaMb);
+                daysCtrl.text = '${preset.validityDays}';
+                priceCtrl.text =
+                    preset.priceNaira?.toStringAsFixed(0) ?? '';
+              });
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (existing == null)
+                GestureDetector(
+                  onTap: usePreset,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: context.zc.chip,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: context.zc.chipBorder),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.bolt,
+                          size: 15,
+                          color: context.zc.accentText,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '${preset.name} · ${_gbLabel(preset.quotaMb / 1024)} · '
+                            '${preset.validityDays} days',
+                            style: TextStyle(
+                              color: context.zc.textPrimary,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          'Use',
+                          style: TextStyle(
+                            color: context.zc.accentText,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (existing == null) const SizedBox(height: 12),
+              _planField('Plan name', nameCtrl,
+                  hint: 'e.g. SmartCash, optional',
+                  onChanged: (_) => setModal(() {})),
+              const SizedBox(height: 10),
+              Text('Network',
+                  style: TextStyle(
+                      color: context.zc.textSecondary, fontSize: 12.5)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final option in [...carriers, 'Other'])
+                    GestureDetector(
+                      onTap: () => setModal(() => selectedCarrier = option),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: selectedCarrier == option
+                              ? context.zc.accent.withAlpha(36)
+                              : context.zc.chip,
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(
+                            color: selectedCarrier == option
+                                ? context.zc.accent.withAlpha(110)
+                                : context.zc.chipBorder,
+                          ),
+                        ),
+                        child: Text(
+                          option,
+                          style: TextStyle(
+                            color: selectedCarrier == option
+                                ? context.zc.accentText
+                                : context.zc.textSecondary,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              if (selectedCarrier == 'Other') ...[
+                const SizedBox(height: 8),
+                _planField('Carrier name', customCarrierCtrl,
+                    hint: 'e.g. Starlink',
+                    onChanged: (_) => setModal(() {})),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _planField('Bundle size', quotaCtrl,
+                        suffix: 'GB',
+                        number: true,
+                        onChanged: (_) => setModal(() {})),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _planField('Lasts', daysCtrl,
+                        suffix: 'days',
+                        number: true,
+                        onChanged: (_) => setModal(() {})),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              _planField('Price', priceCtrl,
+                  prefix: '₦',
+                  number: true,
+                  hint: 'optional',
+                  onChanged: (_) => setModal(() {})),
+              const SizedBox(height: 10),
+              Text(
+                'The counter is read automatically from here. Buy data, '
+                'then log one top-up.',
+                style:
+                    TextStyle(color: context.zc.textMuted, fontSize: 11),
+              ),
+            ],
+          );
+        },
+      ),
+      actions: [
+        if (existing != null)
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onPlanChanged(null);
+            },
+            child: Text(
+              'Stop',
+              style: TextStyle(color: context.zc.danger),
+            ),
+          ),
+        OutlinedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final gb = double.tryParse(quotaCtrl.text.trim());
+            final days = int.tryParse(daysCtrl.text.trim());
+            if (gb == null || gb <= 0 || days == null || days <= 0) return;
+            final price = double.tryParse(priceCtrl.text.trim());
+            final carrier = selectedCarrier == 'Other'
+                ? customCarrierCtrl.text.trim()
+                : selectedCarrier;
+            final now = DateTime.now();
+            Navigator.of(context).pop();
+            widget.onPlanChanged(
+              DataPlanState(
+                carrier: carrier.isEmpty ? 'Airtel' : carrier,
+                name: nameCtrl.text.trim(),
+                planName: _gbLabel(gb),
+                quotaMb: gb * 1024,
+                validityDays: days,
+                priceNaira: price,
+                startedAt: existing?.startedAt ?? now,
+                baselineMb:
+                    existing?.baselineMb ?? usage.current?.usedMb ?? 0,
+              ),
+            );
+          },
+          child: Text(existing == null ? 'Start tracking' : 'Save'),
+        ),
+      ],
+    );
+    // NOTE: controllers intentionally not disposed — same pop-transition
+    // hazard as the alert editor above. Dialog-locals are GC'd.
+  }
+
+  Widget _planField(
+    String label,
+    TextEditingController ctrl, {
+    String? suffix,
+    String? prefix,
+    String? hint,
+    bool number = false,
+    required void Function(String) onChanged,
+  }) {
+    final c = context.zc;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(color: c.textSecondary, fontSize: 12.5)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: ctrl,
+          onChanged: onChanged,
+          keyboardType: number
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : TextInputType.text,
+          decoration: InputDecoration(
+            suffixText: suffix,
+            prefixText: prefix,
+            hintText: hint,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// One tap, prefilled with the current plan's figures: the new bundle
+  /// starts from today's counter, the old one archives with what it used.
+  // ── All time: the full breakdown ───────────────────────────────
+
+  Future<void> _openAllTime(UsageHistory usage, DataPlanState? plan) {
+    final c = context.zc;
+    final past = usage.past;
+    final live = usage.current;
+    final archived = past.fold<double>(0, (a, cy) => a + cy.usedMb);
+    final allTime = archived + (live?.usedMb ?? 0);
+    final rows = <({String label, String sub, double mb})>[
+      if (live != null)
+        (label: live.label, sub: 'this cycle · to date', mb: live.usedMb),
+      for (final cy in past)
+        (label: cy.label, sub: 'archived', mb: cy.usedMb),
+    ];
+    final maxMb = rows.fold<double>(1.0, (m, r) => r.mb > m ? r.mb : m);
+    ({String label, double mb})? biggest;
+    if (past.isNotEmpty) {
+      final b = past.reduce((a, b) => a.usedMb >= b.usedMb ? a : b);
+      biggest = (label: b.label, mb: b.usedMb);
+    } else if (live != null) {
+      biggest = (label: live.label, mb: live.usedMb);
+    }
+    final spent = plan?.totalSpent ?? 0;
+    // Month spend at the current plan's per-GB rate: an estimate, since
+    // the plan hasn't covered the whole history.
+    final double? unitRate = plan != null &&
+            plan.priceNaira != null &&
+            plan.quotaMb > 0
+        ? plan.priceNaira! / plan.quotaMb
+        : null;
+
+    Widget statRow(IconData icon, String label, String value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          child: Row(
+            children: [
+              Icon(icon, size: 15, color: c.textMuted),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        );
+
+    final content = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              ZteClient.formatDataVolume(allTime),
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 40,
+                height: 1.0,
+                fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${past.length + (live != null ? 1 : 0)} cycle${past.length + (live != null ? 1 : 0) == 1 ? '' : 's'} on record',
+            style: TextStyle(color: c.textMuted, fontSize: 11.5),
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: SizedBox(
+              height: 7,
+              child: Row(
+                children: [
+                  if (archived > 0)
+                    Flexible(
+                      flex: (archived * 1000).round().clamp(1, 1000000),
+                      child: Container(color: c.accent.withAlpha(170)),
+                    ),
+                  if (live != null && live.usedMb > 0)
+                    Flexible(
+                      flex: (live.usedMb * 1000).round().clamp(1, 1000000),
+                      child: Container(color: c.live),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (live != null)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'THIS CYCLE',
+                      style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    Text(
+                      ZteClient.formatDataVolume(live.usedMb),
+                      style: TextStyle(
+                        color: c.live,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              if (archived > 0)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'ARCHIVED',
+                      style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    Text(
+                      ZteClient.formatDataVolume(archived),
+                      style: TextStyle(
+                        color: c.accentText,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          Divider(color: c.borderSubtle, height: 22),
+          statRow(
+            Icons.calendar_month,
+            'Months tracked',
+            '${past.length + (live != null ? 1 : 0)}',
+          ),
+          if (past.isNotEmpty)
+            statRow(
+              Icons.analytics_outlined,
+              'Monthly average',
+              ZteClient.formatDataVolume(archived / past.length),
+            ),
+          if (biggest != null)
+            statRow(
+              Icons.emoji_events_outlined,
+              'Biggest · ${biggest.label}',
+              ZteClient.formatDataVolume(biggest.mb),
+            ),
+          if (spent > 0)
+            statRow(
+              Icons.payments_outlined,
+              'Spent on bundles',
+              formatNaira(spent),
+            ),
+          if (unitRate != null && allTime > 0)
+            statRow(
+              Icons.savings_outlined,
+              'Est. lifetime cost',
+              '≈${formatNaira(allTime * unitRate)}',
+            ),
+          if (rows.length > 1) ...[
+            Divider(color: c.borderSubtle, height: 22),
+            Text(
+              'BY MONTH',
+              style: TextStyle(
+                color: c.textMuted,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final r in rows)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${r.label} · ${r.sub}',
+                            style: TextStyle(
+                              color: c.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              ZteClient.formatDataVolume(r.mb),
+                              style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
+                              ),
+                            ),
+                            if (unitRate != null)
+                              Text(
+                                '≈${formatNaira(r.mb * unitRate)}',
+                                style: TextStyle(
+                                  color: c.textMuted,
+                                  fontSize: 10.5,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures()
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    ShareBar(
+                      fraction: r.mb / maxMb,
+                      color: c.accent.withAlpha(150),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      );
+
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+          ),
+          decoration: BoxDecoration(
+            color: c.surfaceLifted,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: c.borderSubtle),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: c.textMuted.withAlpha(70),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: c.accent.withAlpha(26),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: c.accent.withAlpha(80)),
+                      ),
+                      child: Icon(
+                        Icons.all_inclusive,
+                        size: 17,
+                        color: c.accentText,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'All time',
+                            style: TextStyle(
+                              color: c.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Text(
+                            'Every megabyte this app has seen',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: c.textMuted,
+                              fontSize: 11.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+                  child: content,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -928,8 +2071,7 @@ class _MonthRow extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        'ended ${shortDate(cycle.lastAt)} · avg '
-                        '${ZteClient.formatDataVolume(cycle.avgPerDayMb)}/day',
+                        'ended ${shortDate(cycle.lastAt)}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.textMuted, fontSize: 11),
@@ -950,21 +2092,9 @@ class _MonthRow extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 7),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: SizedBox(
-                height: 4,
-                child: Stack(
-                  children: [
-                    Container(color: c.textMuted.withAlpha(30)),
-                    FractionallySizedBox(
-                      alignment: Alignment.centerLeft,
-                      widthFactor: (cycle.usedMb / maxMb).clamp(0.02, 1.0),
-                      child: Container(color: c.accent.withAlpha(150)),
-                    ),
-                  ],
-                ),
-              ),
+            ShareBar(
+              fraction: cycle.usedMb / maxMb,
+              color: c.accent.withAlpha(150),
             ),
           ],
         ),
@@ -973,12 +2103,12 @@ class _MonthRow extends StatelessWidget {
   }
 }
 
-/// Cumulative area chart: usage climbs left → right across the
-/// billing window (not the sampled days, so the curve sits
-/// proportionally in its month from day one). Gridlines at 0/50/100%
-/// of the cycle peak with % labels on the right edge; the newest real
-/// sample gets a dot; the live cycle extends a dashed month-end
-/// projection at the observed daily average.
+/// Cumulative area chart: usage climbs across the billing window
+/// (not the sampled days, so the curve sits proportionally in its
+/// month from day one). Gridlines at 0/50/100% of the cycle peak with
+/// % labels on the right edge; the newest real sample gets a dot; the
+/// live cycle extends a dashed projection with a hollow forecast ring,
+/// named in the card header.
 class _CumulativePainter extends CustomPainter {
   final List<(DateTime, double)> points;
   final DateTime domainStart;
@@ -1077,7 +2207,8 @@ class _CumulativePainter extends CustomPainter {
     canvas.drawCircle(last, 4.0, Paint()..color = dotRing);
     canvas.drawCircle(last, 2.6, Paint()..color = line);
 
-    // Dashed projection to the end of the billing window.
+    // Dashed projection to the end of the billing window, with a
+    // hollow ring marking the forecast endpoint.
     if (projected != null) {
       final end = xy(domainEnd, projected);
       final dashPath = Path()
@@ -1095,6 +2226,14 @@ class _CumulativePainter extends CustomPainter {
           dist += 9; // 5 on, 4 off
         }
       }
+      canvas.drawCircle(
+        end,
+        3.5,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..color = line.withAlpha(180),
+      );
     }
   }
 

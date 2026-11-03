@@ -23,6 +23,11 @@ class InternetCheckCard extends StatefulWidget {
   /// Fired with every completed probe (the connection timeline records it).
   final void Function(ProbeResult result)? onResult;
 
+  /// While true, the balance USSD op owns the radio: the probe waits
+  /// instead of racing it, because a balance dial intermittently blocks
+  /// the very network the probe measures.
+  final bool balanceBusy;
+
   final void Function(String) log;
 
   const InternetCheckCard({
@@ -31,6 +36,7 @@ class InternetCheckCard extends StatefulWidget {
     required this.probe,
     required this.log,
     this.onResult,
+    this.balanceBusy = false,
   });
 
   @override
@@ -41,10 +47,14 @@ class _InternetCheckCardState extends State<InternetCheckCard> {
   ProbeResult? _result;
   bool _busy = false;
 
+  /// Probe deferred until the balance op releases the radio.
+  bool _pendingRun = false;
+
   @override
   void initState() {
     super.initState();
-    if (widget.connected) _run();
+    if (widget.connected && !widget.balanceBusy) _run();
+    if (widget.connected && widget.balanceBusy) _pendingRun = true;
   }
 
   @override
@@ -52,12 +62,38 @@ class _InternetCheckCardState extends State<InternetCheckCard> {
     super.didUpdateWidget(old);
     // One probe per session: reconnecting is exactly when the answer
     // changes, and repeating it every rebuild would be noise.
-    if (widget.connected && !old.connected) _run();
+    if (widget.connected && !old.connected) {
+      if (widget.balanceBusy) {
+        _pendingRun = true;
+      } else {
+        _run();
+      }
+    }
+    // Balance op finished while a probe waited: fire it now.
+    if (_pendingRun &&
+        old.balanceBusy &&
+        !widget.balanceBusy &&
+        widget.connected) {
+      _pendingRun = false;
+      _run();
+    }
   }
 
   Future<void> _run() async {
     if (_busy || !widget.connected) return;
-    setState(() => _busy = true);
+    if (widget.balanceBusy) {
+      // The balance dial owns the radio right now: queue behind it
+      // instead of racing it. The balance flip fires the probe.
+      if (!_pendingRun) {
+        setState(() => _pendingRun = true);
+        widget.log('data path: holding for the balance check…');
+      }
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _pendingRun = false;
+    });
     try {
       final r = await widget.probe.run(gatewayOk: widget.connected);
       if (!mounted) return;
@@ -102,7 +138,9 @@ class _InternetCheckCardState extends State<InternetCheckCard> {
                   key: const Key('data-path-test'),
                   onTap: widget.connected ? _run : null,
                   child: Text(
-                    widget.connected ? 'test' : 'offline',
+                    widget.connected
+                        ? (_pendingRun ? 'waiting' : 'test')
+                        : 'offline',
                     style: TextStyle(
                       color: widget.connected ? c.textMuted : c.textMuted
                           .withAlpha(90),

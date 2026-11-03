@@ -62,6 +62,10 @@ class SettingsTab extends StatefulWidget {
   /// Restart polling (monitor mode changed interval/toggles).
   final VoidCallback? onMonitorChanged;
 
+  /// Smart-alert toggles changed: refresh the cached copy the
+  /// poller tick evaluates against.
+  final VoidCallback? onSmartAlertsChanged;
+
   /// Re-apply the loopback API toggle immediately.
   final VoidCallback? onApiChanged;
 
@@ -93,6 +97,7 @@ class SettingsTab extends StatefulWidget {
     required this.log,
     required this.notify,
     this.onMonitorChanged,
+    this.onSmartAlertsChanged,
     this.onApiChanged,
     this.unsupported = const {},
     this.onUnsupported,
@@ -329,14 +334,19 @@ class _SettingsTabState extends State<SettingsTab> {
                 power,
                 intel,
               ]),
+              const SizedBox(height: 12),
               section('Monitoring', Icons.notifications_outlined, [
-                const SmartAlertsCard(),
+                SmartAlertsCard(
+                  onChanged: widget.onSmartAlertsChanged,
+                ),
                 monitors,
               ]),
+              const SizedBox(height: 12),
               section('Reports', Icons.description_outlined, [
                 incident,
                 timeline,
               ]),
+              const SizedBox(height: 12),
               section('Advanced', Icons.tune, [
                 advanced,
                 rawLog,

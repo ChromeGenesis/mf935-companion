@@ -60,6 +60,14 @@ class _UssdTabState extends State<UssdTab> {
   UssdResult? _last;
   bool _busy = false;
 
+  /// True while the carrier is waiting on a PIN: typed PIN answers are
+  /// redacted in the history and the log, and the saved PIN (if any)
+  /// pre-fills the reply field.
+  bool _pinExpected = false;
+
+  /// User-confirmed PIN for reuse across PIN prompts. Never in history.
+  String? _savedPin;
+
   /// When a menu awaits a reply the existing dialer keypad drives the
   /// answer (stock-phone parity). The phone keyboard is opt-in via the
   /// toggle that replaces the bookmark button while a menu is open —
@@ -79,16 +87,19 @@ class _UssdTabState extends State<UssdTab> {
     super.initState();
     _loadSaved();
     _loadHistory();
+    _loadPin();
     _restoreDraft();
-    // Persist the draft as it changes (also fires for keypad setState).
-    _codeCtrl.addListener(_persistDraft);
+    // Persist the draft as it changes (also fires for keypad setState),
+    // debounced: a prefs write per keystroke is pure overhead.
+    _codeCtrl.addListener(_persistDraftSoon);
     // The glass tile lights up while the field holds focus.
     _codeFocus.addListener(_onFocusChanged);
   }
 
   @override
   void dispose() {
-    _codeCtrl.removeListener(_persistDraft);
+    _draftTimer?.cancel();
+    _codeCtrl.removeListener(_persistDraftSoon);
     _codeFocus.removeListener(_onFocusChanged);
     _codeFocus.dispose();
     _codeCtrl.dispose();
@@ -121,6 +132,17 @@ class _UssdTabState extends State<UssdTab> {
     } catch (_) {}
   }
 
+  Timer? _draftTimer;
+
+  /// Debounced draft write: the listener fires per keystroke, the disk
+  /// write lands half a second after typing stops.
+  void _persistDraftSoon() {
+    _draftTimer?.cancel();
+    _draftTimer = Timer(const Duration(milliseconds: 500), () {
+      unawaited(_persistDraft());
+    });
+  }
+
   Future<void> _loadSaved() async {
     final list = await loadUssdSaved();
     if (!mounted) return;
@@ -133,7 +155,63 @@ class _UssdTabState extends State<UssdTab> {
     setState(() => _history = list);
   }
 
+  Future<void> _loadPin() async {
+    final pin = await loadSavedPin();
+    if (!mounted) return;
+    setState(() => _savedPin = pin);
+  }
+
   Future<void> _persistHistory() => saveUssdHistory(_history);
+
+  /// Single choke point for history writes: PIN prompts are dropped
+  /// (shown live, never stored) and typed PINs are dotted out, then the
+  /// prompt flag tracks whatever the carrier is now asking for. A saved
+  /// PIN pre-fills the reply field the moment a prompt lands.
+  void _push(UssdHistoryEntry entry) {
+    final scrubbed = scrubPinEntry(entry, pinExpected: _pinExpected);
+    _pinExpected = UssdShortcut.isPinPrompt(entry.reply);
+    if (scrubbed == null) return;
+    if (!mounted) return;
+    setState(() {
+      _history = pushUssdHistory(_history, scrubbed);
+      if (_pinExpected && _savedPin != null && _replyCtrl.text.isEmpty) {
+        _replyCtrl.text = _savedPin!;
+      }
+    });
+    _persistHistory();
+  }
+
+  /// Offer to keep a freshly typed PIN once it proves accepted (the
+  /// follow-up reply came back ok). Stored only on this device, never
+  /// in history or the log — and asked once, not nagged.
+  Future<void> _offerSavePin(String pin) async {
+    if (!mounted || _savedPin == pin) return;
+    final update = _savedPin != null;
+    final ok = await confirmAction(
+      context,
+      icon: Icons.key_outlined,
+      title: update ? 'Update saved PIN?' : 'Save this PIN?',
+      message: update
+          ? 'It differs from the saved one. Replace it so PIN prompts keep prefilling correctly?'
+          : 'PIN prompts will prefill with it next time. Stored only on this device.',
+      confirmLabel: update ? 'Update' : 'Save',
+      danger: false,
+    );
+    if (!mounted) return;
+    if (ok) {
+      await saveSavedPin(pin);
+      if (!mounted) return;
+      setState(() => _savedPin = pin);
+      widget.log('PIN saved for reuse');
+    }
+  }
+
+  Future<void> _forgetPin() async {
+    await clearSavedPin();
+    if (!mounted) return;
+    setState(() => _savedPin = null);
+    widget.log('saved PIN forgotten');
+  }
 
   /// Auto-remember a sent code (deduped against manual entries so an
   /// edit survives the next send).
@@ -178,54 +256,52 @@ class _UssdTabState extends State<UssdTab> {
   /// Keypad taps drive the entry through setState so validation,
   /// error text and the Send button react to every tap — not just to
   /// typed keystrokes.
-  void _key(String k) {
-    final v = _codeCtrl.value;
-    final pos = v.selection.isValid
-        ? v.selection.extentOffset
-        : _codeCtrl.text.length;
-    final t = _codeCtrl.text;
-    setState(() {
-      _codeCtrl.value = TextEditingValue(
-        text: t.substring(0, pos) + k + t.substring(pos),
-        selection: TextSelection.collapsed(offset: pos + k.length),
-      );
-    });
-  }
+  void _key(String k) => setState(() => _insertAtCursor(_codeCtrl, k));
 
-  void _backspace() {
-    final v = _codeCtrl.value;
-    final pos = v.selection.isValid
-        ? v.selection.extentOffset
-        : _codeCtrl.text.length;
-    if (pos <= 0) return;
-    final t = _codeCtrl.text;
-    setState(() {
-      _codeCtrl.value = TextEditingValue(
-        text: t.substring(0, pos - 1) + t.substring(pos),
-        selection: TextSelection.collapsed(offset: pos - 1),
-      );
-    });
+  void _backspace() => setState(() => _deleteBeforeCursor(_codeCtrl));
+
+  /// Same idea as [_key]/[_backspace], but writing the menu reply.
+  /// Multi-level sessions need the navigation symbols too, so `*` and
+  /// `#` are first-class answer keys (never inert).
+  void _replyKey(String k) =>
+      setState(() => _insertAtCursor(_replyCtrl, k));
+
+  void _replyBackspace() =>
+      setState(() => _deleteBeforeCursor(_replyCtrl));
+
+  void _replyClearAll() {
+    setState(() => _replyCtrl.clear());
   }
 
   void _clearAll() {
     setState(() => _codeCtrl.clear());
   }
 
-  /// Same idea as [_key]/[_backspace], but writing the menu reply.
-  /// Multi-level sessions need the navigation symbols too, so `*` and
-  /// `#` are first-class answer keys (never inert).
-  void _replyKey(String k) {
-    setState(() => _replyCtrl.text += k);
+  /// Cursor-aware insert/delete shared by the dialer field and the menu
+  /// reply field: keys land where the caret is, never just appended.
+  static void _insertAtCursor(TextEditingController ctrl, String k) {
+    final v = ctrl.value;
+    final pos = v.selection.isValid
+        ? v.selection.extentOffset
+        : ctrl.text.length;
+    final t = ctrl.text;
+    ctrl.value = TextEditingValue(
+      text: t.substring(0, pos) + k + t.substring(pos),
+      selection: TextSelection.collapsed(offset: pos + k.length),
+    );
   }
 
-  void _replyBackspace() {
-    final t = _replyCtrl.text;
-    if (t.isEmpty) return;
-    setState(() => _replyCtrl.text = t.substring(0, t.length - 1));
-  }
-
-  void _replyClearAll() {
-    setState(() => _replyCtrl.clear());
+  static void _deleteBeforeCursor(TextEditingController ctrl) {
+    final v = ctrl.value;
+    final pos = v.selection.isValid
+        ? v.selection.extentOffset
+        : ctrl.text.length;
+    if (pos <= 0) return;
+    final t = ctrl.text;
+    ctrl.value = TextEditingValue(
+      text: t.substring(0, pos - 1) + t.substring(pos),
+      selection: TextSelection.collapsed(offset: pos - 1),
+    );
   }
 
   Future<void> _send() async {
@@ -240,6 +316,7 @@ class _UssdTabState extends State<UssdTab> {
     setState(() {
       _busy = true;
       _last = null;
+      _pinExpected = false; // a fresh code opens a fresh session
     });
     widget.log('USSD $code → sending…');
     try {
@@ -253,18 +330,16 @@ class _UssdTabState extends State<UssdTab> {
         _last = r;
         _replyViaKeyboard = false; // every new menu starts on the keypad
         _showRaw = false; // raw view never leaks across replies
-        _history = pushUssdHistory(
-          _history,
-          UssdHistoryEntry(
-            request: code,
-            reply: r.success ? r.text : r.error,
-            ok: r.success,
-            at: DateTime.now(),
-            rawReply: r.raw,
-          ),
-        );
       });
-      _persistHistory();
+      _push(
+        UssdHistoryEntry(
+          request: code,
+          reply: r.success ? r.text : r.error,
+          ok: r.success,
+          at: DateTime.now(),
+          rawReply: r.raw,
+        ),
+      );
       widget.log(
         r.success
             ? 'USSD reply (${r.text.length} chars${r.needsReply ? ', menu awaits reply' : ''})'
@@ -278,18 +353,14 @@ class _UssdTabState extends State<UssdTab> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _history = pushUssdHistory(
-          _history,
-          UssdHistoryEntry(
-            request: code,
-            reply: '$e',
-            ok: false,
-            at: DateTime.now(),
-          ),
-        );
-      });
-      _persistHistory();
+      _push(
+        UssdHistoryEntry(
+          request: code,
+          reply: '$e',
+          ok: false,
+          at: DateTime.now(),
+        ),
+      );
       widget.log('USSD error: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -300,7 +371,12 @@ class _UssdTabState extends State<UssdTab> {
     final text = _replyCtrl.text.trim();
     if (text.isEmpty || _busy) return;
     setState(() => _busy = true);
-    widget.log('USSD reply "$text" → sending…');
+    // PIN-shaped answers never hit the log in the clear.
+    widget.log(
+      UssdShortcut.looksLikePin(text)
+          ? 'USSD PIN-shaped reply → sending…'
+          : 'USSD reply "$text" → sending…',
+    );
     try {
       final sent = await widget.client.replyUssd(text);
       if (!sent) {
@@ -309,42 +385,40 @@ class _UssdTabState extends State<UssdTab> {
           result: 'not-accepted',
           next: 'Reply was not accepted. The menu may have expired — send the code again.',
         );
-        if (mounted) {
-          setState(() {
-            _history = pushUssdHistory(
-              _history,
-              UssdHistoryEntry(
-                request: '↳ $text',
-                reply: msg,
-                ok: false,
-                at: DateTime.now(),
-              ),
-            );
-          });
-          _persistHistory();
-        }
+        _push(
+          UssdHistoryEntry(
+            request: '↳ $text',
+            reply: msg,
+            ok: false,
+            at: DateTime.now(),
+          ),
+        );
         widget.log('USSD reply not accepted (USSD_PROCESS result=not-accepted)');
         return;
       }
+      final wasPrompt = _pinExpected;
       final r = await widget.client.waitUssdReply();
       if (!mounted) return;
       setState(() {
         _last = r;
-        _history = pushUssdHistory(
-          _history,
-          UssdHistoryEntry(
-            request: '↳ $text',
-            reply: r.success ? r.text : r.error,
-            ok: r.success,
-            at: DateTime.now(),
-            rawReply: r.raw,
-          ),
-        );
         _replyCtrl.clear();
         _replyViaKeyboard = false; // next menu level: keypad again
         _showRaw = false;
       });
-      _persistHistory();
+      _push(
+        UssdHistoryEntry(
+          request: '↳ $text',
+          reply: r.success ? r.text : r.error,
+          ok: r.success,
+          at: DateTime.now(),
+          rawReply: r.raw,
+        ),
+      );
+      // A PIN that drew an ok reply is worth keeping — offered once,
+      // stored only on this device.
+      if (wasPrompt && UssdShortcut.looksLikePin(text) && r.success) {
+        await _offerSavePin(text);
+      }
       widget.log(r.success ? 'USSD reply ok' : 'USSD reply failed: ${r.error}');
     } catch (e) {
       widget.log('USSD reply error: $e');
@@ -383,7 +457,7 @@ class _UssdTabState extends State<UssdTab> {
                     border: Border.all(color: c.borderSubtle),
                   ),
                   child: SelectableText(
-                    saved.shortcut.flowLabel,
+                    saved.shortcut.safeFlowLabel,
                     style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 17,
@@ -432,40 +506,34 @@ class _UssdTabState extends State<UssdTab> {
           // Render every intermediate menu as it lands: a scripted run
           // that guessed wrong must be visibly wrong.
           if (!mounted) return;
-          setState(() {
-            _last = step.reply;
-            _history = pushUssdHistory(
-              _history,
-              UssdHistoryEntry(
-                request: '↳ ${step.answer}',
-                reply: step.reply.success ? step.reply.text : step.reply.error,
-                ok: step.reply.success,
-                at: DateTime.now(),
-                rawReply: step.reply.raw,
-              ),
-            );
-          });
-          _persistHistory();
+          setState(() => _last = step.reply);
+          _push(
+            UssdHistoryEntry(
+              request: '↳ ${step.answer}',
+              reply: step.reply.success ? step.reply.text : step.reply.error,
+              ok: step.reply.success,
+              at: DateTime.now(),
+              rawReply: step.reply.raw,
+            ),
+          );
         },
       );
       if (!mounted) return;
       setState(() {
         _last = run.finalReply;
         _replyViaKeyboard = false;
-        _history = pushUssdHistory(
-          _history,
-          UssdHistoryEntry(
-            request: saved.code,
-            reply: run.opening.success
-                ? run.opening.text
-                : run.opening.error,
-            ok: run.opening.success,
-            at: DateTime.now(),
-            rawReply: run.opening.raw,
-          ),
-        );
       });
-      _persistHistory();
+      _push(
+        UssdHistoryEntry(
+          request: saved.code,
+          reply: run.opening.success
+              ? run.opening.text
+              : run.opening.error,
+          ok: run.opening.success,
+          at: DateTime.now(),
+          rawReply: run.opening.raw,
+        ),
+      );
       widget.log(describeUssdRun(saved.shortcut, run));
       if (run.needsManualReply) {
         widget.log('shortcut left a menu open — answer the rest by hand');
@@ -482,7 +550,12 @@ class _UssdTabState extends State<UssdTab> {
     } catch (e) {
       widget.log('USSD cancel failed: $e');
     }
-    if (mounted) setState(() => _last = null);
+    if (mounted) {
+      setState(() {
+        _last = null;
+        _pinExpected = false;
+      });
+    }
   }
 
   Future<void> _clearHistory() async {
@@ -1195,6 +1268,41 @@ class _UssdTabState extends State<UssdTab> {
           if (reply) ...[
             const SizedBox(height: 8),
             _replyBar(c),
+          ],
+          // Saved PIN in play: one quiet line says where the digits came
+          // from and offers the exit. The digits themselves live only in
+          // the reply field, never in history or the log.
+          if (reply &&
+              _pinExpected &&
+              _savedPin != null &&
+              _replyCtrl.text == _savedPin) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(Icons.key_outlined, size: 12, color: c.textMuted),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'PIN filled from saved',
+                    style: TextStyle(color: c.textMuted, fontSize: 11),
+                  ),
+                ),
+                InkWell(
+                  onTap: _busy ? null : _forgetPin,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      'forget',
+                      style: TextStyle(color: c.textMuted, fontSize: 11),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ],
           const SizedBox(height: 10),
           _keypad(),
